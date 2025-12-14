@@ -43,6 +43,23 @@ export interface BBRCScores {
   environment?: EnvironmentContext; // Optional for backward compatibility
 }
 
+export type SpokenClassification = 'target' | 'distractor' | 'intrusion' | 'repeat';
+
+export interface SpokenToken {
+  raw: string;
+  normalized: string;
+  mappedId?: string;
+  classification: SpokenClassification;
+  timestamp: number;
+  confidence?: number;
+}
+
+export interface StageCapture {
+  tokens: SpokenToken[];
+  intrusions: SpokenToken[];
+  repeats: SpokenToken[];
+}
+
 export interface Patient {
   id: string;
   name: string;
@@ -58,6 +75,7 @@ export interface TestState {
   scores: BBRCScores;
   verbalFluencyList: string[];
   currentStageFoundWords: string[];
+  currentStageResponses: StageCapture;
   clockImageBase64: string | null;
   timeStartedDelayed: number | null;
   // UI State
@@ -84,6 +102,7 @@ export const INITIAL_STATE: TestState = {
   scores: INITIAL_SCORES,
   verbalFluencyList: [],
   currentStageFoundWords: [],
+  currentStageResponses: { tokens: [], intrusions: [], repeats: [] },
   clockImageBase64: null,
   timeStartedDelayed: null,
   fontSizeMultiplier: 1.1, // Default slightly larger for better readability
