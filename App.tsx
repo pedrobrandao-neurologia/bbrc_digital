@@ -1,6 +1,7 @@
 import React, { useState, useReducer, useEffect, useCallback } from 'react';
-import { TestStage, INITIAL_STATE, TestState, EducationLevel, BBRCScores, INITIAL_SCORES, Patient, EnvironmentContext } from './types';
+import { TestStage, INITIAL_STATE, TestState, EducationLevel, BBRCScores, INITIAL_SCORES, Patient, EnvironmentContext, StageCapture } from './types';
 import { TARGET_WORDS, ANIMAL_LIST, FLUENCY_CUTOFFS, RECOGNITION_ITEMS, CUTOFF_SCORES } from './constants';
+import { scoreRecallUtterance, scoreRecognitionUtterance, scoreFluencyUtterance, normalize } from './utils/scoring';
 import VoiceRecorder from './components/VoiceRecorder';
 import ClockCanvas from './components/ClockCanvas';
 import { analyzeClockDrawing } from './geminiService';
@@ -9,9 +10,7 @@ import { getPatients, createPatient, addTestResult, getPatientById } from './uti
 // Helper type to exclude 'date' and object keys
 type NumericScoreKey = Exclude<keyof BBRCScores, 'date' | 'environment'>;
 
-const normalizeText = (text: string) => {
-  return text.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
-};
+const EMPTY_CAPTURE: StageCapture = { tokens: [], intrusions: [], repeats: [] };
 
 // --- TTS Helper ---
 const speakText = (text: string) => {
@@ -44,24 +43,26 @@ type Action =
 function reducer(state: TestState, action: Action): TestState {
   switch (action.type) {
     case 'SET_VIEW':
-      return { 
-        ...state, 
+      return {
+        ...state,
         stage: action.payload,
-        currentStageFoundWords: [], 
-        verbalFluencyList: [] 
+        currentStageFoundWords: [],
+        currentStageResponses: EMPTY_CAPTURE,
+        verbalFluencyList: []
       };
     case 'SET_CURRENT_PATIENT':
       return { ...state, currentPatientId: action.payload };
     case 'UPDATE_TEMP_PATIENT':
       return { ...state, tempPatientData: { ...state.tempPatientData, ...action.payload } };
     case 'START_TEST_SETUP':
-      return { 
-        ...state, 
+      return {
+        ...state,
         stage: TestStage.PRE_TEST_CHECK,
         currentPatientId: action.payload,
         scores: { ...INITIAL_SCORES, date: new Date().toISOString() },
         verbalFluencyList: [],
         currentStageFoundWords: [],
+        currentStageResponses: EMPTY_CAPTURE,
         clockImageBase64: null
       };
     case 'START_ACTUAL_TEST':
@@ -83,6 +84,7 @@ function reducer(state: TestState, action: Action): TestState {
             scores: { ...INITIAL_SCORES, date: new Date().toISOString() },
             verbalFluencyList: [],
             currentStageFoundWords: [],
+            currentStageResponses: EMPTY_CAPTURE,
             clockImageBase64: null
         };
     case 'UPDATE_SCORE':
@@ -92,57 +94,67 @@ function reducer(state: TestState, action: Action): TestState {
     // CENTRALIZED SPEECH LOGIC
     case 'PROCESS_SPEECH': {
       const rawText = action.payload;
-      const normalized = normalizeText(rawText);
-      const words = normalized.split(/[\s,.]+/).filter(w => w.length > 1);
-      
       let newState = { ...state };
-      
-      // Logic for Naming & Memory Phases
+
+      const extendCapture = (incoming: StageCapture) => ({
+        tokens: [...state.currentStageResponses.tokens, ...incoming.tokens],
+        intrusions: [...state.currentStageResponses.intrusions, ...incoming.intrusions],
+        repeats: [...state.currentStageResponses.repeats, ...incoming.repeats],
+      });
+
       const isMemoryPhase = [
-          TestStage.NAMING, 
-          TestStage.INCIDENTAL_MEMORY, 
-          TestStage.IMMEDIATE_MEMORY, 
-          TestStage.LEARNING, 
+          TestStage.NAMING,
+          TestStage.INCIDENTAL_MEMORY,
+          TestStage.IMMEDIATE_MEMORY,
+          TestStage.LEARNING,
           TestStage.DELAYED_MEMORY
       ].includes(state.stage);
 
       if (isMemoryPhase) {
-          let foundAny = false;
-          words.forEach(w => {
-               TARGET_WORDS.forEach(target => {
-                   const tNorm = normalizeText(target);
-                   // Fuzzy match: exact, or plural s/es
-                   if ((w === tNorm || w === tNorm + 's' || w === tNorm + 'es') && !newState.currentStageFoundWords.includes(target)) {
-                       newState.currentStageFoundWords = [...newState.currentStageFoundWords, target];
-                       foundAny = true;
-                   }
-               });
+          const scored = scoreRecallUtterance(rawText, state.currentStageFoundWords);
+          const mergedHits = Array.from(new Set([...state.currentStageFoundWords, ...scored.hits]));
+          newState.currentStageFoundWords = mergedHits;
+          newState.currentStageResponses = extendCapture({
+            tokens: scored.tokens,
+            intrusions: scored.intrusions,
+            repeats: scored.repeats,
           });
 
-          if (foundAny) {
-              // Update score
-              let scoreKey: NumericScoreKey | null = null;
-              if (state.stage === TestStage.NAMING) scoreKey = 'naming';
-              else if (state.stage === TestStage.INCIDENTAL_MEMORY) scoreKey = 'incidentalMemory';
-              else if (state.stage === TestStage.IMMEDIATE_MEMORY) scoreKey = 'immediateMemory';
-              else if (state.stage === TestStage.LEARNING) scoreKey = 'learning';
-              else if (state.stage === TestStage.DELAYED_MEMORY) scoreKey = 'delayedMemory';
+          let scoreKey: NumericScoreKey | null = null;
+          if (state.stage === TestStage.NAMING) scoreKey = 'naming';
+          else if (state.stage === TestStage.INCIDENTAL_MEMORY) scoreKey = 'incidentalMemory';
+          else if (state.stage === TestStage.IMMEDIATE_MEMORY) scoreKey = 'immediateMemory';
+          else if (state.stage === TestStage.LEARNING) scoreKey = 'learning';
+          else if (state.stage === TestStage.DELAYED_MEMORY) scoreKey = 'delayedMemory';
 
-              if (scoreKey) {
-                  // @ts-ignore
-                  newState.scores = { ...newState.scores, [scoreKey]: newState.currentStageFoundWords.length };
-              }
+          if (scoreKey) {
+              // @ts-ignore
+              newState.scores = { ...newState.scores, [scoreKey]: mergedHits.length };
           }
       }
 
-      // Logic for Verbal Fluency
       if (state.stage === TestStage.VERBAL_FLUENCY) {
-          words.forEach(w => {
-              if (ANIMAL_LIST.has(w) && !newState.verbalFluencyList.includes(w)) {
-                  newState.verbalFluencyList = [...newState.verbalFluencyList, w];
-                  newState.scores = { ...newState.scores, verbalFluency: newState.verbalFluencyList.length };
-              }
+          const scored = scoreFluencyUtterance(rawText, ANIMAL_LIST, state.verbalFluencyList.map(normalize));
+          const merged = Array.from(new Set([...state.verbalFluencyList, ...scored.animals]));
+          newState.verbalFluencyList = merged;
+          newState.currentStageResponses = extendCapture({
+            tokens: scored.tokens,
+            intrusions: scored.invalid,
+            repeats: scored.repeats,
           });
+          newState.scores = { ...newState.scores, verbalFluency: merged.length };
+      }
+
+      if (state.stage === TestStage.RECOGNITION) {
+          const scored = scoreRecognitionUtterance(rawText, state.currentStageFoundWords);
+          const mergedHits = Array.from(new Set([...state.currentStageFoundWords, ...scored.hits]));
+          newState.currentStageFoundWords = mergedHits;
+          newState.currentStageResponses = extendCapture({
+            tokens: scored.tokens,
+            intrusions: [...scored.intrusions, ...scored.distractorHits],
+            repeats: scored.repeats,
+          });
+          newState.scores = { ...newState.scores, recognition: mergedHits.length };
       }
 
       return newState;
@@ -317,27 +329,46 @@ const MemoryPhase: React.FC<{
   highContrast: boolean;
   setMicActive: (active: boolean) => void;
   liveTranscript: string;
-}> = ({ title, instruction, foundWords, nextStage, stage, dispatch, highContrast, setMicActive, liveTranscript }) => {
+  delayStart?: number | null;
+}> = ({ title, instruction, foundWords, nextStage, stage, dispatch, highContrast, setMicActive, liveTranscript, delayStart }) => {
     
     const isTimedStudyStage = stage === TestStage.IMMEDIATE_MEMORY || stage === TestStage.LEARNING;
     const isNamingStage = stage === TestStage.NAMING;
     const initialMode = isTimedStudyStage ? 'MEMORIZE' : (isNamingStage ? 'NAMING_ACTIVE' : 'RECALL');
     
-    const [phaseMode, setPhaseMode] = useState<'MEMORIZE' | 'RECALL' | 'NAMING_ACTIVE'>(initialMode); 
+    const [phaseMode, setPhaseMode] = useState<'MEMORIZE' | 'RECALL' | 'NAMING_ACTIVE'>(initialMode);
     const [timeLeft, setTimeLeft] = useState(30);
+    const [remainingDelay, setRemainingDelay] = useState(0);
+
+    const minDelayMs = 5 * 60 * 1000;
 
     // Control Global Mic based on Phase Mode
     useEffect(() => {
-        if (phaseMode === 'MEMORIZE') {
+        const enforceDelay = () => {
+            if (stage === TestStage.DELAYED_MEMORY && delayStart) {
+                const elapsed = Date.now() - delayStart;
+                const remaining = Math.max(0, minDelayMs - elapsed);
+                setRemainingDelay(remaining);
+            } else {
+                setRemainingDelay(0);
+            }
+        };
+        enforceDelay();
+        const interval = setInterval(enforceDelay, 1000);
+        return () => clearInterval(interval);
+    }, [stage, delayStart]);
+
+    useEffect(() => {
+        const delayBlocked = stage === TestStage.DELAYED_MEMORY && remainingDelay > 0;
+        if (phaseMode === 'MEMORIZE' || delayBlocked) {
             setMicActive(false);
         } else {
             setMicActive(true);
         }
-        // Speak instruction when mode changes
         if (phaseMode === 'RECALL') speakText("Agora, diga quais figuras você viu.");
         else speakText(instruction);
 
-    }, [phaseMode, instruction, setMicActive]);
+    }, [phaseMode, instruction, setMicActive, stage, remainingDelay]);
 
     // Timer Logic
     useEffect(() => {
@@ -353,6 +384,8 @@ const MemoryPhase: React.FC<{
     const showImage = phaseMode === 'MEMORIZE' || phaseMode === 'NAMING_ACTIVE';
     const textClass = highContrast ? 'text-white' : 'text-slate-900';
     const cardClass = highContrast ? 'bg-black border-2 border-white text-white' : 'bg-white border border-slate-200 text-slate-900';
+    const delayBlocked = stage === TestStage.DELAYED_MEMORY && remainingDelay > 0;
+    const delaySeconds = Math.max(0, Math.ceil(remainingDelay / 1000));
 
     return (
       <div className="max-w-4xl mx-auto flex flex-col items-center text-center p-4">
@@ -362,6 +395,12 @@ const MemoryPhase: React.FC<{
            <p className={`text-2xl font-medium text-left ${textClass}`}>"{instruction}"</p>
            <button onClick={() => speakText(instruction)} className="p-3 rounded-full bg-medical-500 text-white shrink-0">🔊</button>
         </div>
+
+        {delayBlocked && (
+            <div className="mb-6 p-4 bg-orange-100 border border-orange-200 rounded-2xl text-orange-800 font-semibold">
+                Aguardando o intervalo mínimo de 5 minutos. Faltam {Math.floor(delaySeconds/60)}:{`${delaySeconds % 60}`.padStart(2,'0')}.
+            </div>
+        )}
 
         {isTimedStudyStage && phaseMode === 'MEMORIZE' && (
             <div className="mb-6">
@@ -409,16 +448,17 @@ const MemoryPhase: React.FC<{
                     Pular Tempo ⏩
                  </button>
              ) : (
-                 <button 
+                 <button
                     onClick={() => {
                         if (title.includes("Aprendizado")) {
                             dispatch({ type: 'START_DELAY_TIMER' });
                         }
                         dispatch({ type: 'SET_VIEW', payload: nextStage });
                     }}
-                    className="bg-medical-600 text-white px-10 py-4 rounded-2xl font-bold text-xl shadow-lg hover:bg-medical-500 transform w-full md:w-auto flex items-center justify-center gap-3 min-h-[60px]"
+                    disabled={delayBlocked}
+                    className={`px-10 py-4 rounded-2xl font-bold text-xl shadow-lg transform w-full md:w-auto flex items-center justify-center gap-3 min-h-[60px] ${delayBlocked ? 'bg-slate-300 text-slate-600 cursor-not-allowed' : 'bg-medical-600 text-white hover:bg-medical-500'}`}
                  >
-                    Próximo ➔
+                    {delayBlocked ? 'Aguarde o intervalo' : 'Próximo ➔'}
                  </button>
              )}
         </div>
@@ -561,35 +601,45 @@ const ClockPhase: React.FC<{ dispatch: React.Dispatch<Action>, highContrast: boo
     );
 };
 
-const RecognitionPhase: React.FC<{ dispatch: React.Dispatch<Action>; highContrast: boolean; }> = ({ dispatch, highContrast }) => {
-    const [selected, setSelected] = useState<string[]>([]);
-    useEffect(() => speakText("Toque nas figuras que você já viu hoje."), []);
-    
-    const toggleSelect = (id: string) => {
-      if (selected.includes(id)) setSelected(s => s.filter(x => x !== id));
-      else setSelected(s => [...selected, id]);
-    };
-    const finishRecognition = () => {
-        const correctCount = selected.filter(id => TARGET_WORDS.includes(id)).length;
-        dispatch({ type: 'UPDATE_SCORE', payload: { key: 'recognition', value: correctCount }});
-        dispatch({ type: 'SET_VIEW', payload: TestStage.POST_TEST_CHECK });
-    };
+const RecognitionPhase: React.FC<{ dispatch: React.Dispatch<Action>; highContrast: boolean; foundWords: string[]; responses: StageCapture; setMicActive: (active: boolean) => void; liveTranscript: string; }> = ({ dispatch, highContrast, foundWords, responses, setMicActive, liveTranscript }) => {
+    useEffect(() => {
+        speakText("Diga em voz alta quais figuras você viu antes.");
+        setMicActive(true);
+    }, [setMicActive]);
+
     const textClass = highContrast ? 'text-white' : 'text-slate-900';
+    const cardClass = highContrast ? 'bg-black border-2 border-white text-white' : 'bg-white border border-slate-200 text-slate-900';
 
     return (
       <div className="max-w-6xl mx-auto p-4 flex flex-col items-center">
         <h2 className={`text-4xl font-bold mb-6 ${textClass}`}>Reconhecimento</h2>
         <div className={`p-6 rounded-3xl mb-8 w-full max-w-3xl text-center flex justify-center gap-4 ${highContrast ? 'bg-gray-900' : 'bg-blue-50'}`}>
-            <p className={`text-2xl ${textClass}`}>"Quais figuras você já viu hoje?"</p>
+            <p className={`text-2xl ${textClass}`}>"Diga em voz alta quais figuras você viu antes."</p>
         </div>
         <div className="mb-8 p-2 bg-white rounded-2xl shadow-sm"><img src="/bbrc2.png" alt="Prancha de Reconhecimento" className="max-w-full h-auto max-h-[300px] object-contain mx-auto" /></div>
-        <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-4 mb-32 w-full">
-            {RECOGNITION_ITEMS.map((item) => (
-                <button key={item.id} onClick={() => toggleSelect(item.id)} className={`p-4 rounded-2xl border-2 transition-all flex flex-col items-center justify-center min-h-[100px] ${selected.includes(item.id) ? 'border-medical-500 bg-medical-600 text-white shadow-lg transform scale-105' : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'}`}><span className="font-bold text-xl">{item.label}</span></button>
-            ))}
+
+        <div className={`p-6 rounded-3xl shadow-xl w-full max-w-3xl mb-24 ${cardClass}`}>
+            {liveTranscript && <p className="italic text-slate-500 mb-4">Ouvindo: "{liveTranscript}"</p>}
+            <div className="flex flex-wrap gap-2 mb-4">
+                {foundWords.map((word, idx) => (
+                    <span key={idx} className="bg-green-600 text-white px-3 py-2 rounded-lg text-sm font-semibold">✅ {word}</span>
+                ))}
+                {foundWords.length === 0 && <span className="opacity-60">Aguardando respostas...</span>}
+            </div>
+            {responses.intrusions.length > 0 && (
+                <div className="mt-2 text-left">
+                    <p className="font-bold mb-2">Intrusões / Distratores nomeados</p>
+                    <div className="flex flex-wrap gap-2">
+                        {responses.intrusions.map((i, idx) => (
+                            <span key={idx} className="bg-orange-100 text-orange-800 px-3 py-1 rounded-lg text-sm">{i.raw}</span>
+                        ))}
+                    </div>
+                </div>
+            )}
         </div>
+
         <div className={`fixed bottom-0 left-0 w-full p-6 flex justify-center z-10 ${highContrast ? 'bg-black border-t border-white' : 'bg-white border-t border-slate-200'}`}>
-            <button onClick={finishRecognition} className="bg-green-600 text-white px-12 py-5 rounded-2xl font-bold text-2xl shadow-xl hover:bg-green-500 w-full max-w-md min-h-[70px]">Finalizar ✅</button>
+            <button onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.POST_TEST_CHECK })} className="bg-green-600 text-white px-12 py-5 rounded-2xl font-bold text-2xl shadow-xl hover:bg-green-500 w-full max-w-md min-h-[70px]">Finalizar ✅</button>
         </div>
       </div>
     );
@@ -745,7 +795,7 @@ const App: React.FC = () => {
       case TestStage.LEARNING:
         return <MemoryPhase key="learning" title="4. Aprendizado" instruction="Memorize novamente." scoreKey="learning" scoreValue={state.scores.learning} foundWords={state.currentStageFoundWords} nextStage={TestStage.VERBAL_FLUENCY} stage={state.stage} dispatch={dispatch} highContrast={state.highContrast} setMicActive={setIsMicGlobalActive} liveTranscript={liveTranscript} />;
       case TestStage.DELAYED_MEMORY:
-        return <MemoryPhase key="delayed" title="5. Memória Tardia" instruction="Quais figuras eu mostrei 5 minutos atrás?" scoreKey="delayedMemory" scoreValue={state.scores.delayedMemory} foundWords={state.currentStageFoundWords} nextStage={TestStage.RECOGNITION} stage={state.stage} dispatch={dispatch} highContrast={state.highContrast} setMicActive={setIsMicGlobalActive} liveTranscript={liveTranscript} />;
+        return <MemoryPhase key="delayed" title="5. Memória Tardia" instruction="Quais figuras eu mostrei 5 minutos atrás?" scoreKey="delayedMemory" scoreValue={state.scores.delayedMemory} foundWords={state.currentStageFoundWords} nextStage={TestStage.RECOGNITION} stage={state.stage} dispatch={dispatch} highContrast={state.highContrast} setMicActive={setIsMicGlobalActive} liveTranscript={liveTranscript} delayStart={state.timeStartedDelayed} />;
       
       case TestStage.VERBAL_FLUENCY:
         return <FluencyPhase key="fluency" list={state.verbalFluencyList} dispatch={dispatch} highContrast={state.highContrast} setMicActive={setIsMicGlobalActive} liveTranscript={liveTranscript} />;
@@ -753,7 +803,7 @@ const App: React.FC = () => {
       case TestStage.CLOCK_DRAWING:
         return <ClockPhase key="clock" dispatch={dispatch} highContrast={state.highContrast} />;
       case TestStage.RECOGNITION:
-        return <RecognitionPhase key="recognition" dispatch={dispatch} highContrast={state.highContrast} />;
+        return <RecognitionPhase key="recognition" dispatch={dispatch} highContrast={state.highContrast} foundWords={state.currentStageFoundWords} responses={state.currentStageResponses} setMicActive={setIsMicGlobalActive} liveTranscript={liveTranscript} />;
       case TestStage.RESULTS:
         return <Results scores={state.scores} currentPatientId={state.currentPatientId} dispatch={dispatch} />;
       default: return <div>...</div>;
