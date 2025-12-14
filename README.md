@@ -51,3 +51,7 @@ Já incluímos um fluxo de CI/CD (`.github/workflows/deploy.yml`) que gera uma v
 4) **Compartilhe a URL** exibida na aba Actions → Deployments (algo como `https://<seu-usuario>.github.io/bbrc_digital/`). O app está configurado com `base: './'`, então funciona em qualquer subcaminho do Pages.
 
 > Para ambientes corporativos que bloqueiam GitHub Pages, você pode usar o mesmo pacote estático em qualquer CDN: rode `npm run build`, envie o conteúdo de `dist/` para o host desejado e sirva os arquivos de forma estática.
+
+### Modo 100% front-end (sem backend)
+- O app não depende de banco de dados ou API própria; os cadastros e resultados ficam no **`localStorage`** do navegador.
+- A análise automática do desenho do relógio usa o Gemini **apenas se** a variável `GEMINI_API_KEY` estiver configurada. Em páginas estáticas sem chave, o avaliador pode registrar a nota manualmente (0–5) usando o controle na etapa de relógio, mantendo o fluxo completo funcional no GitHub Pages.
