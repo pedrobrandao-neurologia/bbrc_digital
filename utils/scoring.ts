@@ -7,12 +7,12 @@ export const normalize = (text: string) => text
   .toLowerCase()
   .trim();
 
-const allTargetForms = new Map<string, string>();
+const allTargetForms = new Map<string, { id: string; canonical: string }>();
 TARGET_WORDS.forEach((target) => {
   const canonical = normalize(target);
-  allTargetForms.set(canonical, canonical);
+  allTargetForms.set(canonical, { id: target, canonical });
   const synonyms = TARGET_SYNONYMS[target] || [];
-  synonyms.forEach((syn) => allTargetForms.set(normalize(syn), canonical));
+  synonyms.forEach((syn) => allTargetForms.set(normalize(syn), { id: target, canonical }));
 });
 
 const distractorForms = new Set<string>();
@@ -50,11 +50,11 @@ const classifyToken = (
 
   const target = allTargetForms.get(normalized);
   if (target) {
-    if (seenTargets.has(target)) {
-      return { ...base, classification: 'repeat', mappedId: target };
+    if (seenTargets.has(target.canonical)) {
+      return { ...base, classification: 'repeat', mappedId: target.id };
     }
-    seenTargets.add(target);
-    return { ...base, classification: 'target', mappedId: target };
+    seenTargets.add(target.canonical);
+    return { ...base, classification: 'target', mappedId: target.id };
   }
 
   if (allowDistractors) {
