@@ -5,7 +5,9 @@ import react from '@vitejs/plugin-react';
 export default defineConfig(({ mode }) => {
     const env = loadEnv(mode, '.', '');
     return {
-      base: './',
+      // Use an explicit base path so static assets resolve when hosted under
+      // the /bbrc_digital/ subpath on GitHub Pages.
+      base: '/bbrc_digital/',
       server: {
         port: 3000,
         host: '0.0.0.0',
