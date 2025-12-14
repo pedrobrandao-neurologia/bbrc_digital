@@ -4,7 +4,9 @@ import { TARGET_WORDS, ANIMAL_LIST, FLUENCY_CUTOFFS, RECOGNITION_ITEMS, CUTOFF_S
 import { scoreRecallUtterance, scoreRecognitionUtterance, scoreFluencyUtterance, normalize } from './utils/scoring';
 import VoiceRecorder from './components/VoiceRecorder';
 import ClockCanvas from './components/ClockCanvas';
-import { analyzeClockDrawing } from './geminiService';
+import { analyzeClockDrawing, isGeminiConfigured } from './geminiService';
+import recallSheet from './bbrc1.png';
+import recognitionSheet from './bbrc2.png';
 import { getPatients, createPatient, addTestResult, getPatientById } from './utils/storage';
 
 // Helper type to exclude 'date' and object keys
@@ -365,10 +367,14 @@ const MemoryPhase: React.FC<{
         } else {
             setMicActive(true);
         }
+
+    }, [phaseMode, setMicActive, stage, remainingDelay]);
+
+    useEffect(() => {
         if (phaseMode === 'RECALL') speakText("Agora, diga quais figuras você viu.");
         else speakText(instruction);
 
-    }, [phaseMode, instruction, setMicActive, stage, remainingDelay]);
+    }, [phaseMode, instruction, stage]);
 
     // Timer Logic
     useEffect(() => {
@@ -411,7 +417,7 @@ const MemoryPhase: React.FC<{
 
         <div className={`mb-8 transition-all duration-500 w-full ${showImage ? 'opacity-100 scale-100' : 'opacity-0 scale-95 hidden'}`}>
              <div className="rounded-2xl overflow-hidden bg-white shadow-lg p-2 max-w-lg mx-auto">
-                 <img src="/bbrc1.png" alt="Figuras do teste" className="w-full h-auto object-contain" />
+                 <img src={recallSheet} alt="Figuras do teste" className="w-full h-auto object-contain" />
              </div>
         </div>
 
@@ -569,17 +575,36 @@ const FluencyPhase: React.FC<{
 
 const ClockPhase: React.FC<{ dispatch: React.Dispatch<Action>, highContrast: boolean }> = ({ dispatch, highContrast }) => {
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [analysisMessage, setAnalysisMessage] = useState<string | null>(null);
+    const [manualScore, setManualScore] = useState(3);
+    const [scoreSource, setScoreSource] = useState<'auto' | 'manual' | null>(null);
     useEffect(() => speakText("Desenhe um relógio marcando 11 horas e 10 minutos."), []);
-    
+
+    const applyScore = (score: number, source: 'auto' | 'manual') => {
+        dispatch({ type: 'UPDATE_SCORE', payload: { key: 'clockDrawing', value: score } });
+        setManualScore(score);
+        setScoreSource(source);
+        setAnalysisMessage(source === 'auto'
+          ? 'Pontuação automática aplicada ao desenho.'
+          : 'Pontuação manual registrada.');
+    };
+
     const handleSave = async (base64: string) => {
         dispatch({ type: 'SET_CLOCK_IMAGE', payload: base64 });
+        setAnalysisMessage(null);
+
         if (base64) {
-          setIsAnalyzing(true);
-          const score = await analyzeClockDrawing(base64);
-          dispatch({ type: 'UPDATE_SCORE', payload: { key: 'clockDrawing', value: score }});
-          setIsAnalyzing(false);
+          if (isGeminiConfigured) {
+            setIsAnalyzing(true);
+            const score = await analyzeClockDrawing(base64);
+            applyScore(score, 'auto');
+            setIsAnalyzing(false);
+          } else {
+            setScoreSource(null);
+            setAnalysisMessage('Pontuação automática indisponível. Use o controle manual abaixo para registrar o resultado.');
+          }
         } else {
-          dispatch({ type: 'UPDATE_SCORE', payload: { key: 'clockDrawing', value: 0 }});
+          applyScore(0, 'manual');
         }
     };
     const textClass = highContrast ? 'text-white' : 'text-slate-900';
@@ -594,11 +619,61 @@ const ClockPhase: React.FC<{ dispatch: React.Dispatch<Action>, highContrast: boo
             <div className="bg-white p-2 rounded-3xl border-4 border-slate-200 shadow-xl touch-none">
                 <ClockCanvas onSave={handleSave} />
             </div>
-            {isAnalyzing && <div className="bg-blue-100 text-blue-800 px-6 py-4 rounded-xl font-bold animate-pulse text-lg">Aguarde... Analisando...</div>}
-            <button onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.DELAYED_MEMORY })} className="bg-medical-600 text-white px-12 py-5 rounded-2xl font-bold text-2xl shadow-xl hover:bg-medical-500 w-full max-w-sm min-h-[70px]">Terminei ➔</button>
-        </div>
+            {!isGeminiConfigured && (
+                <div className="bg-amber-50 text-amber-800 px-6 py-4 rounded-xl font-semibold border border-amber-200 max-w-3xl w-full">
+                    Esta versão roda 100% no navegador. Como nenhuma chave do Gemini foi configurada, a pontuação automática do desenho
+                    do relógio fica desativada. Use o controle manual abaixo para registrar a pontuação de 0 a 5.
+                </div>
+            )}
+            {analysisMessage && (
+                <div className={`${highContrast ? 'bg-white text-black' : 'bg-green-50 text-green-800'} px-6 py-3 rounded-xl font-semibold border ${highContrast ? 'border-black' : 'border-green-200'} max-w-3xl w-full`}>
+                    {analysisMessage}
+                </div>
+            )}
+            {isAnalyzing && (
+                <div className="bg-blue-100 text-blue-800 px-6 py-4 rounded-xl font-bold animate-pulse text-lg">
+                    Aguarde... Analisando...
+                </div>
+            )}
+            <div className={`w-full max-w-3xl p-4 rounded-2xl border ${highContrast ? 'border-white text-white' : 'border-slate-200 bg-white'} shadow-sm`}>
+              <div className="flex items-center justify-between mb-4">
+                  <div>
+                      <p className="font-bold text-lg">Pontuação manual</p>
+                      <p className="text-sm opacity-75">Registre 0 a 5 caso a análise automática não esteja disponível.</p>
+                  </div>
+                  {scoreSource && (
+                      <span className={`px-3 py-1 rounded-full text-xs font-bold ${scoreSource === 'auto' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'}`}>
+                          {scoreSource === 'auto' ? 'Automático' : 'Manual'}
+                      </span>
+                  )}
+              </div>
+              <div className="flex items-center gap-4">
+                  <input
+                      type="range"
+                      min={0}
+                      max={5}
+                      step={1}
+                      value={manualScore}
+                      onChange={(e) => setManualScore(Number(e.target.value))}
+                      className="flex-1"
+                      disabled={isAnalyzing}
+                  />
+                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl font-bold ${highContrast ? 'bg-white text-black' : 'bg-slate-100 text-slate-800'}`}>
+                      {manualScore}
+                  </div>
+              </div>
+              <button
+                  onClick={() => applyScore(Math.max(0, Math.min(5, manualScore)), 'manual')}
+                  disabled={isAnalyzing}
+                  className={`mt-4 px-4 py-3 rounded-xl font-semibold w-full max-w-xs ${isAnalyzing ? 'bg-slate-300 cursor-not-allowed' : 'bg-medical-600 text-white hover:bg-medical-500'}`}
+              >
+                  Aplicar pontuação manual
+              </button>
+          </div>
+          <button onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.DELAYED_MEMORY })} className="bg-medical-600 text-white px-12 py-5 rounded-2xl font-bold text-2xl shadow-xl hover:bg-medical-500 w-full max-w-sm min-h-[70px]">Terminei ➔</button>
       </div>
-    );
+    </div>
+  );
 };
 
 const RecognitionPhase: React.FC<{ dispatch: React.Dispatch<Action>; highContrast: boolean; foundWords: string[]; responses: StageCapture; setMicActive: (active: boolean) => void; liveTranscript: string; }> = ({ dispatch, highContrast, foundWords, responses, setMicActive, liveTranscript }) => {
@@ -616,7 +691,7 @@ const RecognitionPhase: React.FC<{ dispatch: React.Dispatch<Action>; highContras
         <div className={`p-6 rounded-3xl mb-8 w-full max-w-3xl text-center flex justify-center gap-4 ${highContrast ? 'bg-gray-900' : 'bg-blue-50'}`}>
             <p className={`text-2xl ${textClass}`}>"Diga em voz alta quais figuras você viu antes."</p>
         </div>
-        <div className="mb-8 p-2 bg-white rounded-2xl shadow-sm"><img src="/bbrc2.png" alt="Prancha de Reconhecimento" className="max-w-full h-auto max-h-[300px] object-contain mx-auto" /></div>
+        <div className="mb-8 p-2 bg-white rounded-2xl shadow-sm"><img src={recognitionSheet} alt="Prancha de Reconhecimento" className="max-w-full h-auto max-h-[300px] object-contain mx-auto" /></div>
 
         <div className={`p-6 rounded-3xl shadow-xl w-full max-w-3xl mb-24 ${cardClass}`}>
             {liveTranscript && <p className="italic text-slate-500 mb-4">Ouvindo: "{liveTranscript}"</p>}

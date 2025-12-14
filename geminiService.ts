@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from "@google/genai";
 
 const apiKey = process.env.API_KEY || ''; // Ensure configured in environment
+export const isGeminiConfigured = Boolean(apiKey);
 const ai = new GoogleGenAI({ apiKey });
 
 export async function analyzeClockDrawing(imageBase64: string): Promise<number> {
