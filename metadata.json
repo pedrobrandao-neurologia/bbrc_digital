@@ -1,0 +1,7 @@
+{
+  "name": "BBRC Digital",
+  "description": "Digital application for the Brief Cognitive Screening Battery (Bateria Breve de Rastreio Cognitivo - Nitrini et al.). Includes voice recognition for verbal tests and AI analysis for the Clock Drawing Test.",
+  "requestFramePermissions": [
+    "microphone"
+  ]
+}
