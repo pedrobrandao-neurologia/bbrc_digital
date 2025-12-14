@@ -41,3 +41,13 @@ View your app in AI Studio: https://ai.studio/apps/drive/1stzlHZ27vsdNLOQK-p9Bmo
 
 ### Testes automatizados
 O projeto usa Vitest (`npm test`). Caso o provedor de nuvem bloqueie o registro do `vitest`, instale localmente ou use um ambiente que permita acesso ao registry npm.
+
+## Publicar para outras pessoas testarem (GitHub Pages)
+Já incluímos um fluxo de CI/CD (`.github/workflows/deploy.yml`) que gera uma versão estática e publica no GitHub Pages sem exigir servidor próprio.
+
+1) **Habilite Pages no repositório**: Settings → Pages → Source: “GitHub Actions”.
+2) **Defina a chave do Gemini (opcional)**: em Settings → Secrets → Actions, crie `GEMINI_API_KEY` se quiser que a build já inclua a chave (ela fica embutida no bundle; use apenas chaves de teste).
+3) **Faça push na branch `main`** (ou clique em “Run workflow” na aba Actions). O workflow roda `npm ci && npm run build`, empacota `dist/` e publica automaticamente.
+4) **Compartilhe a URL** exibida na aba Actions → Deployments (algo como `https://<seu-usuario>.github.io/bbrc_digital/`). O app está configurado com `base: './'`, então funciona em qualquer subcaminho do Pages.
+
+> Para ambientes corporativos que bloqueiam GitHub Pages, você pode usar o mesmo pacote estático em qualquer CDN: rode `npm run build`, envie o conteúdo de `dist/` para o host desejado e sirva os arquivos de forma estática.
