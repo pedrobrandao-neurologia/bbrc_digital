@@ -1,6 +1,6 @@
 import React, { useState, useReducer, useEffect, useCallback } from 'react';
 import { TestStage, INITIAL_STATE, TestState, EducationLevel, BBRCScores, INITIAL_SCORES, Patient, EnvironmentContext, StageCapture } from './types';
-import { TARGET_WORDS, ANIMAL_LIST, FLUENCY_CUTOFFS, RECOGNITION_ITEMS, CUTOFF_SCORES } from './constants';
+import { TARGET_WORDS, ANIMAL_LIST, RECOGNITION_ITEMS } from './constants';
 import { scoreRecallUtterance, scoreRecognitionUtterance, scoreFluencyUtterance, normalize } from './utils/scoring';
 import VoiceRecorder from './components/VoiceRecorder';
 import ClockCanvas from './components/ClockCanvas';
@@ -9,33 +9,52 @@ import recallSheet from './bbrc1.png';
 import recognitionSheet from './bbrc2.png';
 import { getPatients, createPatient, addTestResult, getPatientById } from './utils/storage';
 
-// Helper type to exclude 'date' and object keys
 type NumericScoreKey = Exclude<keyof BBRCScores, 'date' | 'environment'>;
 
 const EMPTY_CAPTURE: StageCapture = { tokens: [], intrusions: [], repeats: [] };
 
-// --- TTS Helper ---
-const speakText = (text: string) => {
+// --- TTS Helper com voz mais lenta para idosos ---
+const speakText = (text: string, rate: number = 0.85) => {
     if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel(); // Stop previous
+        window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(text);
         utterance.lang = 'pt-BR';
-        utterance.rate = 1.0; 
+        utterance.rate = rate;
+        utterance.pitch = 1.0;
+        utterance.volume = 1.0;
         window.speechSynthesis.speak(utterance);
     }
 };
 
+// --- Feedback sonoro simples ---
+const playBeep = (frequency: number = 800, duration: number = 150) => {
+    try {
+        const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+        const oscillator = audioContext.createOscillator();
+        const gainNode = audioContext.createGain();
+        oscillator.connect(gainNode);
+        gainNode.connect(audioContext.destination);
+        oscillator.frequency.value = frequency;
+        oscillator.type = 'sine';
+        gainNode.gain.setValueAtTime(0.3, audioContext.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.01, audioContext.currentTime + duration / 1000);
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + duration / 1000);
+    } catch (e) {
+        // Silently fail if audio not available
+    }
+};
+
 // --- Reducer ---
-type Action = 
+type Action =
   | { type: 'SET_VIEW'; payload: TestStage }
   | { type: 'SET_CURRENT_PATIENT'; payload: string }
   | { type: 'UPDATE_TEMP_PATIENT'; payload: Partial<Patient> }
-  | { type: 'START_TEST_SETUP'; payload: string } 
+  | { type: 'START_TEST_SETUP'; payload: string }
   | { type: 'START_ACTUAL_TEST'; payload: EnvironmentContext }
   | { type: 'FINISH_TEST'; payload: { interrupted: boolean } }
   | { type: 'UPDATE_SCORE'; payload: { key: keyof BBRCScores; value: number } }
   | { type: 'PROCESS_SPEECH'; payload: string }
-  | { type: 'ADD_ANIMAL'; payload: string }
   | { type: 'SET_CLOCK_IMAGE'; payload: string }
   | { type: 'START_DELAY_TIMER' }
   | { type: 'RESET_TEST_STATE' }
@@ -90,10 +109,8 @@ function reducer(state: TestState, action: Action): TestState {
             clockImageBase64: null
         };
     case 'UPDATE_SCORE':
-      // @ts-ignore
       return { ...state, scores: { ...state.scores, [action.payload.key]: action.payload.value } };
-    
-    // CENTRALIZED SPEECH LOGIC
+
     case 'PROCESS_SPEECH': {
       const rawText = action.payload;
       let newState = { ...state };
@@ -130,7 +147,6 @@ function reducer(state: TestState, action: Action): TestState {
           else if (state.stage === TestStage.DELAYED_MEMORY) scoreKey = 'delayedMemory';
 
           if (scoreKey) {
-              // @ts-ignore
               newState.scores = { ...newState.scores, [scoreKey]: mergedHits.length };
           }
       }
@@ -175,155 +191,408 @@ function reducer(state: TestState, action: Action): TestState {
   }
 }
 
-// --- ACCESSIBILITY COMPONENTS ---
+// ===========================================
+// COMPONENTES DE UI SIMPLIFICADOS PARA IDOSOS
+// ===========================================
 
-const AccessibilityControls: React.FC<{
-    dispatch: React.Dispatch<Action>;
-    currentMultiplier: number;
-    highContrast: boolean;
-}> = ({ dispatch, currentMultiplier, highContrast }) => {
-    return (
-        <div className="fixed top-20 right-4 z-50 flex flex-col gap-2 bg-white/90 p-2 rounded-xl shadow-lg border border-slate-200 backdrop-blur-sm">
-            <button 
-                onClick={() => dispatch({ type: 'SET_FONT_SIZE', payload: Math.min(1.5, currentMultiplier + 0.1) })}
-                className="w-10 h-10 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold"
-                aria-label="Aumentar fonte"
-            >
-                A+
-            </button>
-            <button 
-                onClick={() => dispatch({ type: 'SET_FONT_SIZE', payload: Math.max(1.0, currentMultiplier - 0.1) })}
-                className="w-10 h-10 flex items-center justify-center rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold"
-                aria-label="Diminuir fonte"
-            >
-                A-
-            </button>
-            <button 
-                onClick={() => dispatch({ type: 'TOGGLE_CONTRAST' })}
-                className={`w-10 h-10 flex items-center justify-center rounded-lg font-bold transition-colors ${highContrast ? 'bg-black text-white' : 'bg-slate-100 text-slate-800'}`}
-                aria-label="Alto contraste"
-            >
-                🌗
-            </button>
-        </div>
-    );
-};
+// Botao grande e acessivel
+const BigButton: React.FC<{
+    onClick: () => void;
+    children: React.ReactNode;
+    variant?: 'primary' | 'secondary' | 'success' | 'danger';
+    disabled?: boolean;
+    className?: string;
+    icon?: string;
+}> = ({ onClick, children, variant = 'primary', disabled = false, className = '', icon }) => {
+    const baseStyles = "w-full py-6 px-8 rounded-2xl font-bold text-2xl shadow-lg transition-all duration-200 flex items-center justify-center gap-4 min-h-[80px] active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed";
 
-const ProgressBar: React.FC<{ stage: TestStage }> = ({ stage }) => {
-    const stagesOrder = [
-        TestStage.NAMING, TestStage.INCIDENTAL_MEMORY, TestStage.IMMEDIATE_MEMORY, TestStage.LEARNING,
-        TestStage.VERBAL_FLUENCY, TestStage.CLOCK_DRAWING, TestStage.DELAYED_MEMORY, TestStage.RECOGNITION
-    ];
-    
-    const currentIndex = stagesOrder.indexOf(stage);
-    if (currentIndex === -1) return null;
-
-    const progress = ((currentIndex + 1) / stagesOrder.length) * 100;
-
-    return (
-        <div className="w-full bg-slate-200 h-2 fixed top-0 left-0 z-30" role="progressbar" aria-valuenow={progress} aria-valuemin={0} aria-valuemax={100}>
-            <div 
-                className="bg-medical-500 h-2 transition-all duration-500" 
-                style={{ width: `${progress}%` }}
-            ></div>
-        </div>
-    );
-};
-
-// --- PHASES ---
-
-const PreTestCheck: React.FC<{ 
-    dispatch: React.Dispatch<Action>; 
-    onEnableMic: () => void;
-    liveTranscript: string;
-}> = ({ dispatch, onEnableMic, liveTranscript }) => {
-    const [isQuiet, setIsQuiet] = useState<boolean | null>(null);
-    const [micVerified, setMicVerified] = useState(false);
-
-    // Watch global transcript for verification
-    useEffect(() => {
-        if (liveTranscript.length > 0 && !micVerified) {
-            setMicVerified(true);
-        }
-    }, [liveTranscript, micVerified]);
-
-    const start = () => {
-        if (isQuiet === null || !micVerified) return;
-        
-        const envContext: EnvironmentContext = {
-            deviceType: /Mobi|Android/i.test(navigator.userAgent) ? 'Mobile' : 'Desktop',
-            userAgent: navigator.userAgent,
-            screenSize: `${window.innerWidth}x${window.innerHeight}`,
-            startTime: new Date().toISOString(),
-            isQuietEnvironment: isQuiet,
-            hadInterruptions: false 
-        };
-        dispatch({ type: 'START_ACTUAL_TEST', payload: envContext });
+    const variants = {
+        primary: "bg-blue-600 hover:bg-blue-500 text-white",
+        secondary: "bg-gray-200 hover:bg-gray-300 text-gray-800",
+        success: "bg-green-600 hover:bg-green-500 text-white",
+        danger: "bg-red-600 hover:bg-red-500 text-white"
     };
 
     return (
-        <div className="max-w-xl mx-auto p-6 bg-white rounded-3xl shadow-xl mt-10 text-center animate-fade-in">
-            <h2 className="text-2xl font-bold mb-6 text-medical-900">Verificação Inicial</h2>
-            
-            <div className="space-y-8">
-                {/* 1. Mic Test (Mandatory) */}
-                <div className={`p-6 rounded-2xl border-2 transition-colors ${micVerified ? 'bg-green-50 border-green-200' : 'bg-red-50 border-red-200'}`}>
-                    <h3 className="text-lg font-bold text-slate-800 mb-4">1. Teste de Microfone (Obrigatório)</h3>
-                    <p className="text-sm text-slate-600 mb-4">
-                        Clique em "Ativar Microfone" e diga "Olá" para confirmar o funcionamento.
-                    </p>
-                    
-                    {!micVerified && (
-                        <button 
-                            onClick={onEnableMic}
-                            className="bg-medical-600 text-white px-4 py-2 rounded-lg font-bold hover:bg-medical-500 transition-colors mb-4"
-                        >
-                            🎤 Ativar Microfone
-                        </button>
-                    )}
+        <button
+            onClick={onClick}
+            disabled={disabled}
+            className={`${baseStyles} ${variants[variant]} ${className}`}
+        >
+            {icon && <span className="text-3xl">{icon}</span>}
+            {children}
+        </button>
+    );
+};
 
-                    {liveTranscript && <p className="text-slate-700 italic mb-2">Ouvido: "{liveTranscript}"</p>}
-
-                    {micVerified ? (
-                        <div className="text-green-600 font-bold flex items-center justify-center gap-2">
-                             ✅ Microfone funcionando!
-                        </div>
-                    ) : (
-                        <div className="text-red-500 text-sm font-semibold">
-                            ⚠️ Aguardando som...
-                        </div>
-                    )}
-                </div>
-
-                {/* 2. Environment Check */}
-                <div className="bg-slate-50 p-6 rounded-2xl border border-slate-200">
-                    <h3 className="text-lg font-bold text-slate-800 mb-4">2. Ambiente</h3>
-                    <p className="text-sm text-slate-600 mb-4">
-                        Você está em um local silencioso?
-                    </p>
-                    <div className="flex gap-4 justify-center">
-                        <button onClick={() => setIsQuiet(true)} className={`px-4 py-2 rounded-xl font-bold transition-all ${isQuiet === true ? 'bg-medical-600 text-white ring-2 ring-medical-200' : 'bg-white border border-slate-200 text-slate-600'}`}>Sim</button>
-                        <button onClick={() => setIsQuiet(false)} className={`px-4 py-2 rounded-xl font-bold transition-all ${isQuiet === false ? 'bg-slate-600 text-white ring-2 ring-slate-200' : 'bg-white border border-slate-200 text-slate-600'}`}>Não</button>
-                    </div>
-                </div>
-
-                <button 
-                    onClick={start}
-                    disabled={isQuiet === null || !micVerified}
-                    className="w-full bg-green-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white py-4 rounded-xl font-bold text-xl shadow-lg hover:bg-green-500 transition-all transform hover:scale-[1.02]"
+// Card de instrucao com icone grande
+const InstructionCard: React.FC<{
+    instruction: string;
+    onSpeak?: () => void;
+    highContrast?: boolean;
+}> = ({ instruction, onSpeak, highContrast }) => {
+    return (
+        <div className={`p-6 rounded-3xl mb-6 flex items-center gap-4 ${highContrast ? 'bg-yellow-400 text-black' : 'bg-blue-100 border-2 border-blue-200'}`}>
+            <div className="flex-1">
+                <p className="text-xl md:text-2xl font-medium leading-relaxed">
+                    {instruction}
+                </p>
+            </div>
+            {onSpeak && (
+                <button
+                    onClick={onSpeak}
+                    className="p-4 rounded-full bg-blue-600 text-white hover:bg-blue-500 shrink-0 shadow-lg"
+                    aria-label="Ouvir instrucao"
                 >
-                    {!micVerified ? "Teste o microfone primeiro" : "Começar o Teste"}
+                    <span className="text-3xl">🔊</span>
                 </button>
+            )}
+        </div>
+    );
+};
+
+// Indicador de microfone ativo - MUITO visivel
+const MicrophoneIndicator: React.FC<{ isActive: boolean; transcript: string }> = ({ isActive, transcript }) => {
+    if (!isActive) return null;
+
+    return (
+        <div className="fixed top-0 left-0 right-0 bg-green-500 text-white py-4 px-6 z-50 shadow-lg">
+            <div className="max-w-4xl mx-auto flex items-center justify-center gap-4">
+                <div className="relative">
+                    <span className="text-4xl animate-pulse">🎤</span>
+                    <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full animate-ping"></span>
+                </div>
+                <div className="text-center">
+                    <p className="text-xl font-bold">OUVINDO...</p>
+                    {transcript && (
+                        <p className="text-lg opacity-90 mt-1">"{transcript}"</p>
+                    )}
+                </div>
             </div>
         </div>
     );
 };
 
+// Badge de palavra encontrada
+const WordBadge: React.FC<{ word: string; isNew?: boolean }> = ({ word, isNew }) => {
+    return (
+        <span className={`inline-flex items-center gap-2 bg-green-500 text-white px-5 py-3 rounded-xl text-xl font-bold shadow-md ${isNew ? 'animate-bounce' : ''}`}>
+            <span className="text-2xl">✓</span>
+            <span className="capitalize">{word}</span>
+        </span>
+    );
+};
+
+// Contador grande
+const BigCounter: React.FC<{ value: number; label: string; max?: number; warning?: boolean }> = ({ value, label, max, warning }) => {
+    return (
+        <div className={`text-center p-6 rounded-2xl ${warning ? 'bg-red-100 border-4 border-red-400' : 'bg-white border-2 border-gray-200'}`}>
+            <div className={`text-7xl md:text-8xl font-black tabular-nums ${warning ? 'text-red-600' : 'text-blue-600'}`}>
+                {value}
+                {max && <span className="text-4xl text-gray-400">/{max}</span>}
+            </div>
+            <p className="text-xl font-medium text-gray-600 mt-2">{label}</p>
+        </div>
+    );
+};
+
+// Barra de progresso visual
+const ProgressSteps: React.FC<{ current: number; total: number; labels: string[] }> = ({ current, total, labels }) => {
+    return (
+        <div className="w-full py-4 px-2">
+            <div className="flex justify-between mb-2">
+                {labels.map((label, idx) => (
+                    <div key={idx} className="flex flex-col items-center">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-lg
+                            ${idx < current ? 'bg-green-500 text-white' : idx === current ? 'bg-blue-600 text-white ring-4 ring-blue-200' : 'bg-gray-200 text-gray-500'}`}>
+                            {idx < current ? '✓' : idx + 1}
+                        </div>
+                        <span className="text-xs mt-1 text-center max-w-[60px] leading-tight hidden md:block">{label}</span>
+                    </div>
+                ))}
+            </div>
+            <div className="h-2 bg-gray-200 rounded-full overflow-hidden">
+                <div
+                    className="h-full bg-blue-600 transition-all duration-500"
+                    style={{ width: `${(current / (total - 1)) * 100}%` }}
+                />
+            </div>
+        </div>
+    );
+};
+
+// ===========================================
+// TELAS PRINCIPAIS
+// ===========================================
+
+// Tela inicial simplificada
+const WelcomeScreen: React.FC<{
+    dispatch: React.Dispatch<Action>;
+    patients: Patient[];
+}> = ({ dispatch, patients }) => {
+
+    useEffect(() => {
+        speakText("Bem-vindo ao teste de memória. Toque no botão verde para começar.", 0.8);
+    }, []);
+
+    return (
+        <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gradient-to-b from-blue-50 to-white">
+            <div className="max-w-lg w-full text-center space-y-8">
+                <div className="mb-8">
+                    <div className="text-8xl mb-4">🧠</div>
+                    <h1 className="text-4xl md:text-5xl font-black text-blue-900 mb-4">
+                        Teste de Memória
+                    </h1>
+                    <p className="text-xl text-gray-600">
+                        BBRC Digital
+                    </p>
+                </div>
+
+                <div className="space-y-4">
+                    <BigButton
+                        onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.REGISTRATION })}
+                        variant="success"
+                        icon="▶️"
+                    >
+                        COMEÇAR TESTE
+                    </BigButton>
+
+                    {patients.length > 0 && (
+                        <BigButton
+                            onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.DASHBOARD })}
+                            variant="secondary"
+                            icon="📋"
+                        >
+                            Ver Pacientes ({patients.length})
+                        </BigButton>
+                    )}
+                </div>
+
+                <p className="text-gray-500 text-lg mt-8">
+                    Toque no botão verde para iniciar
+                </p>
+            </div>
+        </div>
+    );
+};
+
+// Cadastro simplificado
+const SimpleRegistration: React.FC<{
+    dispatch: React.Dispatch<Action>;
+    tempData: Partial<Patient>;
+}> = ({ dispatch, tempData }) => {
+    const [step, setStep] = useState(1);
+
+    useEffect(() => {
+        if (step === 1) speakText("Digite o nome do paciente.", 0.8);
+        else if (step === 2) speakText("Digite a idade.", 0.8);
+        else if (step === 3) speakText("Selecione a escolaridade.", 0.8);
+    }, [step]);
+
+    const handleContinue = () => {
+        if (step === 1 && tempData.name) {
+            setStep(2);
+        } else if (step === 2 && tempData.age) {
+            setStep(3);
+        } else if (step === 3) {
+            const patient = createPatient(
+                tempData.name || 'Paciente',
+                tempData.age || 65,
+                tempData.education || EducationLevel.LOW
+            );
+            dispatch({ type: 'START_TEST_SETUP', payload: patient.id });
+        }
+    };
+
+    return (
+        <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gradient-to-b from-blue-50 to-white">
+            <div className="max-w-lg w-full">
+                <button
+                    onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.DASHBOARD })}
+                    className="text-blue-600 font-bold text-xl mb-6 flex items-center gap-2"
+                >
+                    ← Voltar
+                </button>
+
+                <div className="bg-white rounded-3xl shadow-xl p-8 space-y-6">
+                    <h2 className="text-3xl font-bold text-center text-gray-800 mb-6">
+                        Cadastro
+                    </h2>
+
+                    {/* Step 1: Nome */}
+                    {step === 1 && (
+                        <div className="space-y-4">
+                            <label className="block text-xl font-medium text-gray-700">
+                                Nome do paciente:
+                            </label>
+                            <input
+                                type="text"
+                                placeholder="Digite o nome"
+                                value={tempData.name || ''}
+                                onChange={(e) => dispatch({ type: 'UPDATE_TEMP_PATIENT', payload: { name: e.target.value } })}
+                                className="w-full p-5 text-2xl border-2 border-gray-300 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                autoFocus
+                            />
+                        </div>
+                    )}
+
+                    {/* Step 2: Idade */}
+                    {step === 2 && (
+                        <div className="space-y-4">
+                            <label className="block text-xl font-medium text-gray-700">
+                                Idade:
+                            </label>
+                            <input
+                                type="number"
+                                placeholder="Ex: 65"
+                                value={tempData.age || ''}
+                                onChange={(e) => dispatch({ type: 'UPDATE_TEMP_PATIENT', payload: { age: parseInt(e.target.value) || 0 } })}
+                                className="w-full p-5 text-2xl border-2 border-gray-300 rounded-xl focus:border-blue-500 focus:ring-4 focus:ring-blue-100"
+                                min={18}
+                                max={120}
+                                autoFocus
+                            />
+                        </div>
+                    )}
+
+                    {/* Step 3: Escolaridade */}
+                    {step === 3 && (
+                        <div className="space-y-4">
+                            <label className="block text-xl font-medium text-gray-700 mb-4">
+                                Anos de estudo:
+                            </label>
+                            <div className="space-y-3">
+                                {[
+                                    { value: EducationLevel.ILLITERATE, label: 'Analfabeto', icon: '📖' },
+                                    { value: EducationLevel.LOW, label: '1 a 7 anos', icon: '📚' },
+                                    { value: EducationLevel.HIGH, label: '8 anos ou mais', icon: '🎓' }
+                                ].map((option) => (
+                                    <button
+                                        key={option.value}
+                                        onClick={() => dispatch({ type: 'UPDATE_TEMP_PATIENT', payload: { education: option.value } })}
+                                        className={`w-full p-5 rounded-xl text-xl font-medium flex items-center gap-4 transition-all
+                                            ${tempData.education === option.value
+                                                ? 'bg-blue-600 text-white ring-4 ring-blue-200'
+                                                : 'bg-gray-100 text-gray-800 hover:bg-gray-200'}`}
+                                    >
+                                        <span className="text-3xl">{option.icon}</span>
+                                        {option.label}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    <div className="flex gap-4 pt-4">
+                        {step > 1 && (
+                            <BigButton
+                                onClick={() => setStep(step - 1)}
+                                variant="secondary"
+                            >
+                                Voltar
+                            </BigButton>
+                        )}
+                        <BigButton
+                            onClick={handleContinue}
+                            variant="primary"
+                            disabled={
+                                (step === 1 && !tempData.name) ||
+                                (step === 2 && !tempData.age)
+                            }
+                        >
+                            {step === 3 ? 'Iniciar Teste' : 'Continuar'}
+                        </BigButton>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Verificacao pre-teste
+const PreTestCheck: React.FC<{
+    dispatch: React.Dispatch<Action>;
+    onEnableMic: () => void;
+    liveTranscript: string;
+}> = ({ dispatch, onEnableMic, liveTranscript }) => {
+    const [micVerified, setMicVerified] = useState(false);
+
+    useEffect(() => {
+        speakText("Antes de começar, vamos testar o microfone. Toque no botão azul e diga qualquer palavra.", 0.8);
+    }, []);
+
+    useEffect(() => {
+        if (liveTranscript.length > 0 && !micVerified) {
+            setMicVerified(true);
+            playBeep(1000, 200);
+            speakText("Microfone funcionando! Agora toque no botão verde para começar o teste.", 0.8);
+        }
+    }, [liveTranscript, micVerified]);
+
+    const start = () => {
+        const envContext: EnvironmentContext = {
+            deviceType: /Mobi|Android/i.test(navigator.userAgent) ? 'Mobile' : 'Desktop',
+            userAgent: navigator.userAgent,
+            screenSize: `${window.innerWidth}x${window.innerHeight}`,
+            startTime: new Date().toISOString(),
+            isQuietEnvironment: true,
+            hadInterruptions: false
+        };
+        dispatch({ type: 'START_ACTUAL_TEST', payload: envContext });
+    };
+
+    return (
+        <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gradient-to-b from-blue-50 to-white">
+            <div className="max-w-lg w-full text-center space-y-8">
+                <div className="text-7xl mb-4">🎤</div>
+                <h2 className="text-3xl font-bold text-gray-800">
+                    Teste do Microfone
+                </h2>
+
+                <div className={`p-8 rounded-3xl border-4 transition-all ${micVerified ? 'bg-green-50 border-green-400' : 'bg-orange-50 border-orange-300'}`}>
+                    {!micVerified ? (
+                        <>
+                            <p className="text-xl text-gray-700 mb-6">
+                                Toque no botão abaixo e diga alguma coisa para testar.
+                            </p>
+                            <BigButton onClick={onEnableMic} variant="primary" icon="🎤">
+                                ATIVAR MICROFONE
+                            </BigButton>
+                            {liveTranscript && (
+                                <p className="mt-4 text-lg text-gray-600 italic">
+                                    Ouvindo: "{liveTranscript}"
+                                </p>
+                            )}
+                        </>
+                    ) : (
+                        <div className="text-center">
+                            <div className="text-6xl mb-4">✅</div>
+                            <p className="text-2xl font-bold text-green-700">
+                                Microfone funcionando!
+                            </p>
+                        </div>
+                    )}
+                </div>
+
+                <BigButton
+                    onClick={start}
+                    variant="success"
+                    disabled={!micVerified}
+                    icon="▶️"
+                >
+                    {micVerified ? 'COMEÇAR O TESTE' : 'Teste o microfone primeiro'}
+                </BigButton>
+            </div>
+        </div>
+    );
+};
+
+// Fase de Memoria (Nomeacao, Incidental, Imediata, Aprendizado, Tardia)
 const MemoryPhase: React.FC<{
   title: string;
+  stepNumber: number;
   instruction: string;
   scoreKey: NumericScoreKey;
-  scoreValue: number;
   foundWords: string[];
   nextStage: TestStage;
   stage: TestStage;
@@ -332,19 +601,28 @@ const MemoryPhase: React.FC<{
   setMicActive: (active: boolean) => void;
   liveTranscript: string;
   delayStart?: number | null;
-}> = ({ title, instruction, foundWords, nextStage, stage, dispatch, highContrast, setMicActive, liveTranscript, delayStart }) => {
-    
+}> = ({ title, stepNumber, instruction, foundWords, nextStage, stage, dispatch, highContrast, setMicActive, liveTranscript, delayStart }) => {
+
     const isTimedStudyStage = stage === TestStage.IMMEDIATE_MEMORY || stage === TestStage.LEARNING;
     const isNamingStage = stage === TestStage.NAMING;
     const initialMode = isTimedStudyStage ? 'MEMORIZE' : (isNamingStage ? 'NAMING_ACTIVE' : 'RECALL');
-    
+
     const [phaseMode, setPhaseMode] = useState<'MEMORIZE' | 'RECALL' | 'NAMING_ACTIVE'>(initialMode);
     const [timeLeft, setTimeLeft] = useState(30);
     const [remainingDelay, setRemainingDelay] = useState(0);
+    const [lastFoundCount, setLastFoundCount] = useState(0);
 
     const minDelayMs = 5 * 60 * 1000;
 
-    // Control Global Mic based on Phase Mode
+    // Feedback sonoro quando encontra palavra
+    useEffect(() => {
+        if (foundWords.length > lastFoundCount) {
+            playBeep(1200, 100);
+            setLastFoundCount(foundWords.length);
+        }
+    }, [foundWords.length, lastFoundCount]);
+
+    // Delay timer
     useEffect(() => {
         const enforceDelay = () => {
             if (stage === TestStage.DELAYED_MEMORY && delayStart) {
@@ -360,6 +638,7 @@ const MemoryPhase: React.FC<{
         return () => clearInterval(interval);
     }, [stage, delayStart]);
 
+    // Mic control
     useEffect(() => {
         const delayBlocked = stage === TestStage.DELAYED_MEMORY && remainingDelay > 0;
         if (phaseMode === 'MEMORIZE' || delayBlocked) {
@@ -367,112 +646,125 @@ const MemoryPhase: React.FC<{
         } else {
             setMicActive(true);
         }
-
     }, [phaseMode, setMicActive, stage, remainingDelay]);
 
+    // TTS
     useEffect(() => {
-        if (phaseMode === 'RECALL') speakText("Agora, diga quais figuras você viu.");
-        else speakText(instruction);
+        if (phaseMode === 'RECALL') {
+            speakText("Agora, diga em voz alta quais figuras você viu.", 0.8);
+        } else if (phaseMode === 'MEMORIZE') {
+            speakText("Olhe bem para as figuras. Você tem 30 segundos para memorizar.", 0.8);
+        } else {
+            speakText(instruction, 0.8);
+        }
+    }, [phaseMode, instruction]);
 
-    }, [phaseMode, instruction, stage]);
-
-    // Timer Logic
+    // Timer
     useEffect(() => {
         let interval: any = null;
         if (isTimedStudyStage && phaseMode === 'MEMORIZE' && timeLeft > 0) {
             interval = setInterval(() => setTimeLeft(t => t - 1), 1000);
         } else if (isTimedStudyStage && phaseMode === 'MEMORIZE' && timeLeft === 0) {
+            playBeep(600, 300);
             setPhaseMode('RECALL');
         }
         return () => clearInterval(interval);
     }, [isTimedStudyStage, phaseMode, timeLeft]);
 
     const showImage = phaseMode === 'MEMORIZE' || phaseMode === 'NAMING_ACTIVE';
-    const textClass = highContrast ? 'text-white' : 'text-slate-900';
-    const cardClass = highContrast ? 'bg-black border-2 border-white text-white' : 'bg-white border border-slate-200 text-slate-900';
     const delayBlocked = stage === TestStage.DELAYED_MEMORY && remainingDelay > 0;
     const delaySeconds = Math.max(0, Math.ceil(remainingDelay / 1000));
 
+    const progressLabels = ['Nome', 'M1', 'M2', 'M3', 'Animais', 'Relógio', 'M4', 'Reconh'];
+
     return (
-      <div className="max-w-4xl mx-auto flex flex-col items-center text-center p-4">
-        <h2 className={`text-4xl font-bold mb-6 ${textClass}`}>{title}</h2>
-        
-        <div className={`p-6 rounded-3xl mb-8 max-w-2xl w-full shadow-sm flex items-center justify-between gap-4 ${highContrast ? 'bg-gray-900 border border-white' : 'bg-blue-50 border border-blue-100'}`}>
-           <p className={`text-2xl font-medium text-left ${textClass}`}>"{instruction}"</p>
-           <button onClick={() => speakText(instruction)} className="p-3 rounded-full bg-medical-500 text-white shrink-0">🔊</button>
-        </div>
+        <div className={`min-h-screen ${highContrast ? 'bg-black text-white' : 'bg-gradient-to-b from-blue-50 to-white'}`}>
+            <MicrophoneIndicator isActive={phaseMode !== 'MEMORIZE' && !delayBlocked} transcript={liveTranscript} />
 
-        {delayBlocked && (
-            <div className="mb-6 p-4 bg-orange-100 border border-orange-200 rounded-2xl text-orange-800 font-semibold">
-                Aguardando o intervalo mínimo de 5 minutos. Faltam {Math.floor(delaySeconds/60)}:{`${delaySeconds % 60}`.padStart(2,'0')}.
-            </div>
-        )}
+            <div className="max-w-4xl mx-auto p-4 pt-20">
+                <ProgressSteps current={stepNumber - 1} total={8} labels={progressLabels} />
 
-        {isTimedStudyStage && phaseMode === 'MEMORIZE' && (
-            <div className="mb-6">
-                <div className="text-8xl font-black text-medical-600 tabular-nums">{timeLeft}</div>
-                <p className="text-slate-500 animate-pulse">Memorizando...</p>
-            </div>
-        )}
+                <div className="text-center mb-6">
+                    <h2 className={`text-3xl md:text-4xl font-bold ${highContrast ? 'text-yellow-400' : 'text-blue-900'}`}>
+                        {stepNumber}. {title}
+                    </h2>
+                </div>
 
-        <div className={`mb-8 transition-all duration-500 w-full ${showImage ? 'opacity-100 scale-100' : 'opacity-0 scale-95 hidden'}`}>
-             <div className="rounded-2xl overflow-hidden bg-white shadow-lg p-2 max-w-lg mx-auto">
-                 <img src={recallSheet} alt="Figuras do teste" className="w-full h-auto object-contain" />
-             </div>
-        </div>
+                <InstructionCard
+                    instruction={phaseMode === 'MEMORIZE' ? 'Memorize as figuras abaixo.' : instruction}
+                    onSpeak={() => speakText(instruction, 0.8)}
+                    highContrast={highContrast}
+                />
 
-        {(phaseMode === 'RECALL' || phaseMode === 'NAMING_ACTIVE') && (
-            <div className={`p-8 rounded-3xl shadow-xl mb-8 w-full max-w-2xl ${cardClass}`}>
-                <h3 className={`text-xl font-bold mb-6 ${textClass}`}>Fale as figuras...</h3>
-                
-                {liveTranscript && (
-                    <div className="mb-4 p-2 bg-slate-100 rounded text-slate-600 italic text-sm">
-                        "{liveTranscript}"
+                {delayBlocked && (
+                    <div className="mb-6 p-6 bg-orange-100 border-4 border-orange-400 rounded-2xl text-center">
+                        <p className="text-xl font-bold text-orange-800">
+                            Aguarde o intervalo de 5 minutos
+                        </p>
+                        <p className="text-4xl font-black text-orange-600 mt-2">
+                            {Math.floor(delaySeconds/60)}:{String(delaySeconds % 60).padStart(2,'0')}
+                        </p>
                     </div>
                 )}
 
-                <div className="flex flex-wrap gap-2 justify-center">
-                    {foundWords.length > 0 ? (
-                        foundWords.map((word, idx) => (
-                            <span key={idx} className="bg-green-500 text-white px-4 py-2 rounded-lg text-lg font-bold shadow-sm animate-pop capitalize">
-                                ✅ {word}
-                            </span>
-                        ))
-                    ) : (
-                        <span className="opacity-50 text-4xl">...</span>
-                    )}
+                {isTimedStudyStage && phaseMode === 'MEMORIZE' && (
+                    <BigCounter value={timeLeft} label="segundos" warning={timeLeft < 10} />
+                )}
+
+                {showImage && (
+                    <div className="my-6 bg-white rounded-3xl shadow-xl p-4 border-4 border-gray-200">
+                        <img src={recallSheet} alt="Figuras do teste" className="w-full h-auto max-h-[400px] object-contain mx-auto" />
+                    </div>
+                )}
+
+                {(phaseMode === 'RECALL' || phaseMode === 'NAMING_ACTIVE') && !delayBlocked && (
+                    <div className={`p-6 rounded-3xl shadow-xl mb-6 ${highContrast ? 'bg-gray-900 border-2 border-white' : 'bg-white border-2 border-gray-200'}`}>
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-xl font-bold">Figuras identificadas:</h3>
+                            <span className="text-3xl font-black text-blue-600">{foundWords.length}/10</span>
+                        </div>
+
+                        <div className="flex flex-wrap gap-3 min-h-[60px]">
+                            {foundWords.length > 0 ? (
+                                foundWords.map((word, idx) => (
+                                    <WordBadge key={idx} word={word} />
+                                ))
+                            ) : (
+                                <p className="text-gray-400 text-lg">Aguardando respostas...</p>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+                <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t-2 border-gray-200 shadow-lg">
+                    <div className="max-w-lg mx-auto">
+                        {isTimedStudyStage && phaseMode === 'MEMORIZE' ? (
+                            <BigButton onClick={() => setPhaseMode('RECALL')} variant="secondary">
+                                Pular Tempo
+                            </BigButton>
+                        ) : (
+                            <BigButton
+                                onClick={() => {
+                                    if (title.includes("Aprendizado")) {
+                                        dispatch({ type: 'START_DELAY_TIMER' });
+                                    }
+                                    dispatch({ type: 'SET_VIEW', payload: nextStage });
+                                }}
+                                disabled={delayBlocked}
+                                variant="success"
+                                icon="→"
+                            >
+                                PRÓXIMO
+                            </BigButton>
+                        )}
+                    </div>
                 </div>
             </div>
-        )}
-
-        <div className={`fixed bottom-0 left-0 w-full p-6 flex justify-center z-10 ${highContrast ? 'bg-black border-t border-white' : 'bg-white border-t border-slate-200'}`}>
-             {isTimedStudyStage && phaseMode === 'MEMORIZE' ? (
-                 <button 
-                    onClick={() => { setPhaseMode('RECALL'); }}
-                    className="bg-slate-200 text-slate-800 px-8 py-4 rounded-2xl font-bold text-xl hover:bg-slate-300 w-full md:w-auto min-h-[60px]"
-                 >
-                    Pular Tempo ⏩
-                 </button>
-             ) : (
-                 <button
-                    onClick={() => {
-                        if (title.includes("Aprendizado")) {
-                            dispatch({ type: 'START_DELAY_TIMER' });
-                        }
-                        dispatch({ type: 'SET_VIEW', payload: nextStage });
-                    }}
-                    disabled={delayBlocked}
-                    className={`px-10 py-4 rounded-2xl font-bold text-xl shadow-lg transform w-full md:w-auto flex items-center justify-center gap-3 min-h-[60px] ${delayBlocked ? 'bg-slate-300 text-slate-600 cursor-not-allowed' : 'bg-medical-600 text-white hover:bg-medical-500'}`}
-                 >
-                    {delayBlocked ? 'Aguarde o intervalo' : 'Próximo ➔'}
-                 </button>
-             )}
         </div>
-        <div className="h-28"></div>
-      </div>
     );
 };
 
+// Fase de Fluencia Verbal
 const FluencyPhase: React.FC<{
   list: string[];
   dispatch: React.Dispatch<Action>;
@@ -482,432 +774,691 @@ const FluencyPhase: React.FC<{
 }> = ({ list, dispatch, highContrast, setMicActive, liveTranscript }) => {
     const [timeLeft, setTimeLeft] = useState(60);
     const [isActive, setIsActive] = useState(false);
-    const instructionText = "Fale todos os nomes de animais que vierem à cabeça, o mais rápido possível. Quanto mais, melhor.";
+    const [lastCount, setLastCount] = useState(0);
 
     useEffect(() => {
-        speakText(instructionText);
-        setMicActive(true); 
+        speakText("Fale todos os nomes de animais que você conseguir lembrar. Quando estiver pronto, toque no botão verde.", 0.8);
+        setMicActive(true);
     }, [setMicActive]);
 
     useEffect(() => {
-      let interval: any = null;
-      if (isActive && timeLeft > 0) {
-        interval = setInterval(() => setTimeLeft(t => t - 1), 1000);
-      } else if (timeLeft === 0) {
-        setIsActive(false);
-        speakText("Tempo esgotado.");
-      }
-      return () => clearInterval(interval);
+        if (list.length > lastCount) {
+            playBeep(1000, 80);
+            setLastCount(list.length);
+        }
+    }, [list.length, lastCount]);
+
+    useEffect(() => {
+        let interval: any = null;
+        if (isActive && timeLeft > 0) {
+            interval = setInterval(() => setTimeLeft(t => t - 1), 1000);
+        } else if (timeLeft === 0 && isActive) {
+            setIsActive(false);
+            playBeep(400, 500);
+            speakText("Tempo esgotado!", 0.9);
+        }
+        return () => clearInterval(interval);
     }, [isActive, timeLeft]);
 
     const startTest = () => {
-      setIsActive(true);
-      setTimeLeft(60);
-      dispatch({ type: 'UPDATE_SCORE', payload: { key: 'verbalFluency', value: 0 }});
+        setIsActive(true);
+        setTimeLeft(60);
+        speakText("Pode começar! Fale nomes de animais.", 0.9);
     };
 
-    const textClass = highContrast ? 'text-white' : 'text-slate-900';
-    const cardClass = highContrast ? 'bg-black border-2 border-white text-white' : 'bg-white border border-slate-200 text-slate-900';
+    const progressLabels = ['Nome', 'M1', 'M2', 'M3', 'Animais', 'Relógio', 'M4', 'Reconh'];
 
     return (
-      <div className="max-w-4xl mx-auto p-4 flex flex-col items-center">
-        <h2 className={`text-4xl font-bold mb-6 ${textClass}`}>Fluência Verbal</h2>
-        
-        <div className={`p-6 rounded-3xl mb-8 max-w-2xl w-full shadow-sm flex flex-col gap-4 ${highContrast ? 'bg-gray-900' : 'bg-blue-50'}`}>
-            <p className={`text-xl font-medium leading-relaxed ${textClass}`}>"{instructionText}"</p>
-        </div>
+        <div className={`min-h-screen ${highContrast ? 'bg-black text-white' : 'bg-gradient-to-b from-blue-50 to-white'}`}>
+            <MicrophoneIndicator isActive={isActive} transcript={liveTranscript} />
 
-        <div className="grid md:grid-cols-2 gap-6 w-full max-w-4xl">
-           <div className={`p-8 rounded-3xl shadow-lg flex flex-col justify-center items-center min-h-[300px] ${cardClass}`}>
-              {!isActive && timeLeft === 60 && (
-                 <>
-                    <div className="text-6xl mb-6">🦁</div>
-                    <button onClick={startTest} className="bg-green-600 text-white px-10 py-5 rounded-2xl text-2xl font-bold hover:bg-green-500 shadow-xl w-full">
-                        COMEÇAR CRONÔMETRO
-                    </button>
-                 </>
-              )}
-              {(isActive || timeLeft < 60) && (
-                  <div className="text-center">
-                     <span className={`text-8xl font-black ${timeLeft < 10 ? 'text-red-500' : textClass}`}>{timeLeft}</span>
-                     <p className="text-sm font-bold uppercase mt-2">Segundos</p>
-                  </div>
-              )}
-           </div>
+            <div className="max-w-4xl mx-auto p-4 pt-6">
+                <ProgressSteps current={4} total={8} labels={progressLabels} />
 
-           <div className={`p-8 rounded-3xl shadow-lg flex flex-col min-h-[300px] ${cardClass}`}>
-              <div className="flex justify-between items-center mb-6">
-                <h3 className="font-bold text-xl">Animais: {list.length}</h3>
-              </div>
-              
-              {liveTranscript && (
-                    <div className="mb-4 p-2 bg-slate-100 rounded text-slate-600 italic text-sm">
-                        Ouvindo: "{liveTranscript}"
-                    </div>
-              )}
-
-              <div className="flex-1 rounded-2xl p-4 overflow-y-auto max-h-60 mb-6 bg-opacity-10 bg-slate-500">
-                <div className="flex flex-wrap gap-2">
-                  {list.map((animal, i) => (
-                    <span key={i} className="bg-medical-100 border border-medical-200 px-3 py-1 rounded-lg text-lg font-medium text-medical-800">
-                      {animal}
-                    </span>
-                  ))}
+                <div className="text-center mb-6">
+                    <h2 className={`text-3xl md:text-4xl font-bold ${highContrast ? 'text-yellow-400' : 'text-blue-900'}`}>
+                        5. Fluência Verbal
+                    </h2>
                 </div>
-              </div>
-           </div>
+
+                <InstructionCard
+                    instruction="Fale o maior número de nomes de ANIMAIS que conseguir em 1 minuto."
+                    onSpeak={() => speakText("Fale o maior número de nomes de animais que conseguir em 1 minuto.", 0.8)}
+                    highContrast={highContrast}
+                />
+
+                <div className="grid md:grid-cols-2 gap-6 mb-6">
+                    <div className={`p-6 rounded-3xl shadow-xl text-center ${highContrast ? 'bg-gray-900' : 'bg-white'}`}>
+                        {!isActive && timeLeft === 60 ? (
+                            <>
+                                <div className="text-7xl mb-4">🦁</div>
+                                <BigButton onClick={startTest} variant="success" icon="▶️">
+                                    COMEÇAR
+                                </BigButton>
+                            </>
+                        ) : (
+                            <BigCounter
+                                value={timeLeft}
+                                label="segundos"
+                                warning={timeLeft < 10}
+                            />
+                        )}
+                    </div>
+
+                    <div className={`p-6 rounded-3xl shadow-xl ${highContrast ? 'bg-gray-900' : 'bg-white'}`}>
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-xl font-bold">Animais:</h3>
+                            <span className="text-4xl font-black text-green-600">{list.length}</span>
+                        </div>
+                        <div className="max-h-48 overflow-y-auto">
+                            <div className="flex flex-wrap gap-2">
+                                {list.map((animal, i) => (
+                                    <span key={i} className="bg-green-100 text-green-800 px-3 py-2 rounded-lg font-medium">
+                                        {animal}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t-2 border-gray-200 shadow-lg">
+                    <div className="max-w-lg mx-auto">
+                        <BigButton
+                            onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.CLOCK_DRAWING })}
+                            variant="success"
+                            icon="→"
+                        >
+                            PRÓXIMO
+                        </BigButton>
+                    </div>
+                </div>
+            </div>
         </div>
-        
-        <div className={`fixed bottom-0 left-0 w-full p-6 flex justify-center z-10 ${highContrast ? 'bg-black border-t border-white' : 'bg-white border-t border-slate-200'}`}>
-           <button 
-              onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.CLOCK_DRAWING })}
-              className="bg-medical-600 text-white px-10 py-4 rounded-2xl font-bold text-xl shadow-lg hover:bg-medical-500 w-full max-w-md min-h-[60px]"
-            >
-              Próximo (Relógio) ➔
-            </button>
-        </div>
-        <div className="h-28"></div>
-      </div>
     );
 };
 
-// ... ClockPhase, RecognitionPhase, Results etc (Simple pass-throughs or no mic needed) ... 
-
-const ClockPhase: React.FC<{ dispatch: React.Dispatch<Action>, highContrast: boolean }> = ({ dispatch, highContrast }) => {
+// Fase do Relogio
+const ClockPhase: React.FC<{
+    dispatch: React.Dispatch<Action>;
+    highContrast: boolean;
+}> = ({ dispatch, highContrast }) => {
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [analysisMessage, setAnalysisMessage] = useState<string | null>(null);
     const [manualScore, setManualScore] = useState(3);
-    const [scoreSource, setScoreSource] = useState<'auto' | 'manual' | null>(null);
-    useEffect(() => speakText("Desenhe um relógio marcando 11 horas e 10 minutos."), []);
+    const [scoreApplied, setScoreApplied] = useState(false);
 
-    const applyScore = (score: number, source: 'auto' | 'manual') => {
+    useEffect(() => {
+        speakText("Desenhe um relógio grande, com todos os números. Coloque os ponteiros marcando 11 horas e 10 minutos.", 0.8);
+    }, []);
+
+    const applyScore = (score: number) => {
         dispatch({ type: 'UPDATE_SCORE', payload: { key: 'clockDrawing', value: score } });
         setManualScore(score);
-        setScoreSource(source);
-        setAnalysisMessage(source === 'auto'
-          ? 'Pontuação automática aplicada ao desenho.'
-          : 'Pontuação manual registrada.');
+        setScoreApplied(true);
+        playBeep(800, 150);
     };
 
     const handleSave = async (base64: string) => {
         dispatch({ type: 'SET_CLOCK_IMAGE', payload: base64 });
-        setAnalysisMessage(null);
 
-        if (base64) {
-          if (isGeminiConfigured) {
+        if (base64 && isGeminiConfigured) {
             setIsAnalyzing(true);
             const score = await analyzeClockDrawing(base64);
-            applyScore(score, 'auto');
+            applyScore(score);
             setIsAnalyzing(false);
-          } else {
-            setScoreSource(null);
-            setAnalysisMessage('Pontuação automática indisponível. Use o controle manual abaixo para registrar o resultado.');
-          }
-        } else {
-          applyScore(0, 'manual');
         }
     };
-    const textClass = highContrast ? 'text-white' : 'text-slate-900';
+
+    const progressLabels = ['Nome', 'M1', 'M2', 'M3', 'Animais', 'Relógio', 'M4', 'Reconh'];
 
     return (
-      <div className="max-w-5xl mx-auto text-center p-4">
-        <h2 className={`text-4xl font-bold mb-6 ${textClass}`}>Relógio</h2>
-        <div className={`p-6 rounded-3xl mb-8 max-w-3xl mx-auto text-left flex gap-4 ${highContrast ? 'bg-gray-900' : 'bg-blue-50'}`}>
-            <p className={`text-xl leading-relaxed ${textClass}`}>"Desenhe um relógio grande marcando <strong>11 horas e 10 minutos</strong>."</p>
-        </div>
-        <div className="flex flex-col items-center justify-center gap-8 pb-24">
-            <div className="bg-white p-2 rounded-3xl border-4 border-slate-200 shadow-xl touch-none">
-                <ClockCanvas onSave={handleSave} />
-            </div>
-            {!isGeminiConfigured && (
-                <div className="bg-amber-50 text-amber-800 px-6 py-4 rounded-xl font-semibold border border-amber-200 max-w-3xl w-full">
-                    Esta versão roda 100% no navegador. Como nenhuma chave do Gemini foi configurada, a pontuação automática do desenho
-                    do relógio fica desativada. Use o controle manual abaixo para registrar a pontuação de 0 a 5.
+        <div className={`min-h-screen pb-32 ${highContrast ? 'bg-black text-white' : 'bg-gradient-to-b from-blue-50 to-white'}`}>
+            <div className="max-w-4xl mx-auto p-4">
+                <ProgressSteps current={5} total={8} labels={progressLabels} />
+
+                <div className="text-center mb-6">
+                    <h2 className={`text-3xl md:text-4xl font-bold ${highContrast ? 'text-yellow-400' : 'text-blue-900'}`}>
+                        6. Desenho do Relógio
+                    </h2>
                 </div>
-            )}
-            {analysisMessage && (
-                <div className={`${highContrast ? 'bg-white text-black' : 'bg-green-50 text-green-800'} px-6 py-3 rounded-xl font-semibold border ${highContrast ? 'border-black' : 'border-green-200'} max-w-3xl w-full`}>
-                    {analysisMessage}
-                </div>
-            )}
-            {isAnalyzing && (
-                <div className="bg-blue-100 text-blue-800 px-6 py-4 rounded-xl font-bold animate-pulse text-lg">
-                    Aguarde... Analisando...
-                </div>
-            )}
-            <div className={`w-full max-w-3xl p-4 rounded-2xl border ${highContrast ? 'border-white text-white' : 'border-slate-200 bg-white'} shadow-sm`}>
-              <div className="flex items-center justify-between mb-4">
-                  <div>
-                      <p className="font-bold text-lg">Pontuação manual</p>
-                      <p className="text-sm opacity-75">Registre 0 a 5 caso a análise automática não esteja disponível.</p>
-                  </div>
-                  {scoreSource && (
-                      <span className={`px-3 py-1 rounded-full text-xs font-bold ${scoreSource === 'auto' ? 'bg-blue-100 text-blue-800' : 'bg-purple-100 text-purple-800'}`}>
-                          {scoreSource === 'auto' ? 'Automático' : 'Manual'}
-                      </span>
-                  )}
-              </div>
-              <div className="flex items-center gap-4">
-                  <input
-                      type="range"
-                      min={0}
-                      max={5}
-                      step={1}
-                      value={manualScore}
-                      onChange={(e) => setManualScore(Number(e.target.value))}
-                      className="flex-1"
-                      disabled={isAnalyzing}
-                  />
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center text-xl font-bold ${highContrast ? 'bg-white text-black' : 'bg-slate-100 text-slate-800'}`}>
-                      {manualScore}
-                  </div>
-              </div>
-              <button
-                  onClick={() => applyScore(Math.max(0, Math.min(5, manualScore)), 'manual')}
-                  disabled={isAnalyzing}
-                  className={`mt-4 px-4 py-3 rounded-xl font-semibold w-full max-w-xs ${isAnalyzing ? 'bg-slate-300 cursor-not-allowed' : 'bg-medical-600 text-white hover:bg-medical-500'}`}
-              >
-                  Aplicar pontuação manual
-              </button>
-          </div>
-          <button onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.DELAYED_MEMORY })} className="bg-medical-600 text-white px-12 py-5 rounded-2xl font-bold text-2xl shadow-xl hover:bg-medical-500 w-full max-w-sm min-h-[70px]">Terminei ➔</button>
-      </div>
-    </div>
-  );
-};
 
-const RecognitionPhase: React.FC<{ dispatch: React.Dispatch<Action>; highContrast: boolean; foundWords: string[]; responses: StageCapture; setMicActive: (active: boolean) => void; liveTranscript: string; }> = ({ dispatch, highContrast, foundWords, responses, setMicActive, liveTranscript }) => {
-    useEffect(() => {
-        speakText("Diga em voz alta quais figuras você viu antes.");
-        setMicActive(true);
-    }, [setMicActive]);
+                <InstructionCard
+                    instruction="Desenhe um relógio com todos os números, marcando 11 horas e 10 minutos."
+                    onSpeak={() => speakText("Desenhe um relógio com todos os números, marcando 11 horas e 10 minutos.", 0.8)}
+                    highContrast={highContrast}
+                />
 
-    const textClass = highContrast ? 'text-white' : 'text-slate-900';
-    const cardClass = highContrast ? 'bg-black border-2 border-white text-white' : 'bg-white border border-slate-200 text-slate-900';
+                <div className="flex flex-col items-center gap-6">
+                    <div className="bg-white p-3 rounded-3xl border-4 border-gray-300 shadow-xl touch-none">
+                        <ClockCanvas onSave={handleSave} />
+                    </div>
 
-    return (
-      <div className="max-w-6xl mx-auto p-4 flex flex-col items-center">
-        <h2 className={`text-4xl font-bold mb-6 ${textClass}`}>Reconhecimento</h2>
-        <div className={`p-6 rounded-3xl mb-8 w-full max-w-3xl text-center flex justify-center gap-4 ${highContrast ? 'bg-gray-900' : 'bg-blue-50'}`}>
-            <p className={`text-2xl ${textClass}`}>"Diga em voz alta quais figuras você viu antes."</p>
-        </div>
-        <div className="mb-8 p-2 bg-white rounded-2xl shadow-sm"><img src={recognitionSheet} alt="Prancha de Reconhecimento" className="max-w-full h-auto max-h-[300px] object-contain mx-auto" /></div>
+                    {isAnalyzing && (
+                        <div className="bg-blue-100 text-blue-800 px-6 py-4 rounded-xl font-bold animate-pulse text-xl">
+                            Analisando desenho...
+                        </div>
+                    )}
 
-        <div className={`p-6 rounded-3xl shadow-xl w-full max-w-3xl mb-24 ${cardClass}`}>
-            {liveTranscript && <p className="italic text-slate-500 mb-4">Ouvindo: "{liveTranscript}"</p>}
-            <div className="flex flex-wrap gap-2 mb-4">
-                {foundWords.map((word, idx) => (
-                    <span key={idx} className="bg-green-600 text-white px-3 py-2 rounded-lg text-sm font-semibold">✅ {word}</span>
-                ))}
-                {foundWords.length === 0 && <span className="opacity-60">Aguardando respostas...</span>}
-            </div>
-            {responses.intrusions.length > 0 && (
-                <div className="mt-2 text-left">
-                    <p className="font-bold mb-2">Intrusões / Distratores nomeados</p>
-                    <div className="flex flex-wrap gap-2">
-                        {responses.intrusions.map((i, idx) => (
-                            <span key={idx} className="bg-orange-100 text-orange-800 px-3 py-1 rounded-lg text-sm">{i.raw}</span>
-                        ))}
+                    <div className={`w-full max-w-md p-6 rounded-2xl ${highContrast ? 'bg-gray-900 border border-white' : 'bg-white border-2 border-gray-200'}`}>
+                        <p className="font-bold text-xl mb-4 text-center">Pontuação: 0 a 5</p>
+                        <div className="flex items-center gap-4 mb-4">
+                            <input
+                                type="range"
+                                min={0}
+                                max={5}
+                                step={1}
+                                value={manualScore}
+                                onChange={(e) => setManualScore(Number(e.target.value))}
+                                className="flex-1 h-3"
+                                disabled={isAnalyzing}
+                            />
+                            <div className={`w-16 h-16 rounded-xl flex items-center justify-center text-3xl font-black ${scoreApplied ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-800'}`}>
+                                {manualScore}
+                            </div>
+                        </div>
+                        <BigButton
+                            onClick={() => applyScore(manualScore)}
+                            disabled={isAnalyzing}
+                            variant={scoreApplied ? "success" : "primary"}
+                        >
+                            {scoreApplied ? '✓ Pontuação Registrada' : 'Registrar Pontuação'}
+                        </BigButton>
                     </div>
                 </div>
-            )}
-        </div>
 
-        <div className={`fixed bottom-0 left-0 w-full p-6 flex justify-center z-10 ${highContrast ? 'bg-black border-t border-white' : 'bg-white border-t border-slate-200'}`}>
-            <button onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.POST_TEST_CHECK })} className="bg-green-600 text-white px-12 py-5 rounded-2xl font-bold text-2xl shadow-xl hover:bg-green-500 w-full max-w-md min-h-[70px]">Finalizar ✅</button>
+                <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t-2 border-gray-200 shadow-lg">
+                    <div className="max-w-lg mx-auto">
+                        <BigButton
+                            onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.DELAYED_MEMORY })}
+                            variant="success"
+                            icon="→"
+                        >
+                            PRÓXIMO
+                        </BigButton>
+                    </div>
+                </div>
+            </div>
         </div>
-      </div>
     );
 };
 
-const PostTestCheck: React.FC<{ currentPatientId: string | null; scores: BBRCScores; dispatch: React.Dispatch<Action>; }> = ({ currentPatientId, scores, dispatch }) => {
+// Fase de Reconhecimento
+const RecognitionPhase: React.FC<{
+    dispatch: React.Dispatch<Action>;
+    highContrast: boolean;
+    foundWords: string[];
+    responses: StageCapture;
+    setMicActive: (active: boolean) => void;
+    liveTranscript: string;
+}> = ({ dispatch, highContrast, foundWords, responses, setMicActive, liveTranscript }) => {
+    const [lastCount, setLastCount] = useState(0);
+
+    useEffect(() => {
+        speakText("Olhe para as figuras e diga em voz alta quais você viu antes.", 0.8);
+        setMicActive(true);
+    }, [setMicActive]);
+
+    useEffect(() => {
+        if (foundWords.length > lastCount) {
+            playBeep(1000, 100);
+            setLastCount(foundWords.length);
+        }
+    }, [foundWords.length, lastCount]);
+
+    const progressLabels = ['Nome', 'M1', 'M2', 'M3', 'Animais', 'Relógio', 'M4', 'Reconh'];
+
+    return (
+        <div className={`min-h-screen pb-32 ${highContrast ? 'bg-black text-white' : 'bg-gradient-to-b from-blue-50 to-white'}`}>
+            <MicrophoneIndicator isActive={true} transcript={liveTranscript} />
+
+            <div className="max-w-4xl mx-auto p-4 pt-20">
+                <ProgressSteps current={7} total={8} labels={progressLabels} />
+
+                <div className="text-center mb-6">
+                    <h2 className={`text-3xl md:text-4xl font-bold ${highContrast ? 'text-yellow-400' : 'text-blue-900'}`}>
+                        8. Reconhecimento
+                    </h2>
+                </div>
+
+                <InstructionCard
+                    instruction="Diga em voz alta quais figuras você viu antes."
+                    onSpeak={() => speakText("Diga em voz alta quais figuras você viu antes.", 0.8)}
+                    highContrast={highContrast}
+                />
+
+                <div className="mb-6 bg-white rounded-3xl shadow-xl p-4 border-4 border-gray-200">
+                    <img src={recognitionSheet} alt="Prancha de Reconhecimento" className="w-full h-auto max-h-[300px] object-contain mx-auto" />
+                </div>
+
+                <div className={`p-6 rounded-3xl shadow-xl mb-6 ${highContrast ? 'bg-gray-900 border-2 border-white' : 'bg-white border-2 border-gray-200'}`}>
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-xl font-bold">Figuras reconhecidas:</h3>
+                        <span className="text-3xl font-black text-green-600">{foundWords.length}/10</span>
+                    </div>
+
+                    <div className="flex flex-wrap gap-3 min-h-[60px]">
+                        {foundWords.length > 0 ? (
+                            foundWords.map((word, idx) => (
+                                <WordBadge key={idx} word={word} />
+                            ))
+                        ) : (
+                            <p className="text-gray-400 text-lg">Aguardando respostas...</p>
+                        )}
+                    </div>
+
+                    {responses.intrusions.length > 0 && (
+                        <div className="mt-4 pt-4 border-t border-gray-200">
+                            <p className="text-orange-600 font-bold mb-2">Distratores mencionados:</p>
+                            <div className="flex flex-wrap gap-2">
+                                {responses.intrusions.map((i, idx) => (
+                                    <span key={idx} className="bg-orange-100 text-orange-700 px-3 py-1 rounded-lg text-sm">
+                                        {i.raw}
+                                    </span>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t-2 border-gray-200 shadow-lg">
+                    <div className="max-w-lg mx-auto">
+                        <BigButton
+                            onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.POST_TEST_CHECK })}
+                            variant="success"
+                            icon="✓"
+                        >
+                            FINALIZAR TESTE
+                        </BigButton>
+                    </div>
+                </div>
+            </div>
+        </div>
+    );
+};
+
+// Verificacao pos-teste
+const PostTestCheck: React.FC<{
+    currentPatientId: string | null;
+    scores: BBRCScores;
+    dispatch: React.Dispatch<Action>;
+}> = ({ currentPatientId, scores, dispatch }) => {
     const [interrupted, setInterrupted] = useState<boolean | null>(null);
+
+    useEffect(() => {
+        speakText("Teste concluído! Você foi interrompido durante o teste?", 0.8);
+    }, []);
+
     const finish = () => {
         if (interrupted === null) return;
         dispatch({ type: 'FINISH_TEST', payload: { interrupted } });
         if (currentPatientId) {
-             const finalScores = { ...scores, date: new Date().toISOString(), environment: { ...scores.environment!, hadInterruptions: interrupted } };
-             addTestResult(currentPatientId, finalScores);
+            const finalScores = {
+                ...scores,
+                date: new Date().toISOString(),
+                environment: { ...scores.environment!, hadInterruptions: interrupted }
+            };
+            addTestResult(currentPatientId, finalScores);
         }
+        playBeep(600, 300);
+        speakText("Resultados salvos com sucesso!", 0.8);
     };
+
     return (
-        <div className="max-w-xl mx-auto p-6 bg-white rounded-3xl shadow-xl mt-10 text-center animate-fade-in">
-            <h2 className="text-2xl font-bold mb-6 text-medical-900">Teste Finalizado!</h2>
-            <div className="space-y-6">
-                <div className="bg-slate-50 p-6 rounded-2xl">
-                    <p className="text-lg font-medium text-slate-800 mb-4">Você foi interrompido(a)?</p>
-                    <div className="flex gap-4 justify-center">
-                        <button onClick={() => setInterrupted(false)} className={`px-6 py-3 rounded-xl font-bold transition-all ${interrupted === false ? 'bg-green-600 text-white' : 'bg-white border border-slate-200'}`}>Não</button>
-                        <button onClick={() => setInterrupted(true)} className={`px-6 py-3 rounded-xl font-bold transition-all ${interrupted === true ? 'bg-orange-500 text-white' : 'bg-white border border-slate-200'}`}>Sim</button>
+        <div className="min-h-screen flex flex-col items-center justify-center p-6 bg-gradient-to-b from-green-50 to-white">
+            <div className="max-w-lg w-full text-center space-y-8">
+                <div className="text-7xl mb-4">✅</div>
+                <h2 className="text-4xl font-bold text-green-800">
+                    Teste Concluído!
+                </h2>
+
+                <div className="bg-white p-8 rounded-3xl shadow-xl">
+                    <p className="text-2xl font-medium text-gray-700 mb-6">
+                        Você foi interrompido durante o teste?
+                    </p>
+                    <div className="flex gap-4">
+                        <BigButton
+                            onClick={() => setInterrupted(false)}
+                            variant={interrupted === false ? "success" : "secondary"}
+                        >
+                            NÃO
+                        </BigButton>
+                        <BigButton
+                            onClick={() => setInterrupted(true)}
+                            variant={interrupted === true ? "danger" : "secondary"}
+                        >
+                            SIM
+                        </BigButton>
                     </div>
                 </div>
-                <button onClick={finish} disabled={interrupted === null} className="w-full bg-medical-600 disabled:bg-slate-300 text-white py-4 rounded-xl font-bold text-xl shadow-lg">Ver Resultados</button>
+
+                <BigButton
+                    onClick={finish}
+                    disabled={interrupted === null}
+                    variant="success"
+                    icon="📊"
+                >
+                    VER RESULTADOS
+                </BigButton>
             </div>
         </div>
     );
 };
 
-const Results = ({ scores, currentPatientId, dispatch }: any) => {
-    const patient = getPatientById(currentPatientId!);
-    if(!patient) return null;
+// Tela de Resultados
+const Results: React.FC<{
+    scores: BBRCScores;
+    currentPatientId: string;
+    dispatch: React.Dispatch<Action>;
+}> = ({ scores, currentPatientId, dispatch }) => {
+    const patient = getPatientById(currentPatientId);
+
+    useEffect(() => {
+        speakText("Aqui estão os resultados do teste.", 0.8);
+    }, []);
+
+    if (!patient) return null;
+
+    const results = [
+        { label: 'Memória Imediata', value: scores.immediateMemory, max: 10, icon: '🧠' },
+        { label: 'Memória Tardia', value: scores.delayedMemory, max: 10, icon: '💭' },
+        { label: 'Fluência Verbal', value: scores.verbalFluency, max: null, icon: '🗣️' },
+        { label: 'Desenho do Relógio', value: scores.clockDrawing, max: 5, icon: '🕐' },
+        { label: 'Reconhecimento', value: scores.recognition, max: 10, icon: '👁️' },
+    ];
+
     return (
-        <div className="max-w-3xl mx-auto bg-white p-10 rounded-3xl shadow-2xl border border-slate-100 my-10 text-center">
-            <h2 className="text-4xl font-black text-medical-900 mb-6">Resultados: {patient.name}</h2>
-            <div className="grid grid-cols-2 gap-4 text-left mb-8">
-                {[
-                    { l: 'Memória Imediata', v: scores.immediateMemory + '/10' },
-                    { l: 'Memória Tardia', v: scores.delayedMemory + '/10' },
-                    { l: 'Fluência Verbal', v: scores.verbalFluency },
-                    { l: 'Relógio', v: scores.clockDrawing + '/5' }
-                ].map((i,x) => (
-                    <div key={x} className="bg-blue-50 p-4 rounded-xl">
-                        <span className="block text-sm text-slate-500">{i.l}</span>
-                        <span className="text-2xl font-bold text-medical-700">{i.v}</span>
-                    </div>
-                ))}
-            </div>
-            <button onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.DASHBOARD })} className="bg-medical-600 text-white px-8 py-4 rounded-xl font-bold text-xl w-full">Voltar ao Início</button>
-        </div>
-    );
-};
-
-// --- MAIN APP COMPONENT ---
-
-const App: React.FC = () => {
-  const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [allPatients, setAllPatients] = useState<Patient[]>([]);
-  
-  // GLOBAL MIC STATE
-  const [isMicGlobalActive, setIsMicGlobalActive] = useState(false);
-  const [liveTranscript, setLiveTranscript] = useState("");
-
-  useEffect(() => {
-    if (state.stage === TestStage.DASHBOARD) {
-        setAllPatients(getPatients());
-        setIsMicGlobalActive(false); // Ensure off on dashboard
-    }
-  }, [state.stage]);
-
-  // Handle Global Speech
-  const handleSpeechResult = useCallback((text: string, isFinal: boolean) => {
-      // Visual feedback
-      setLiveTranscript(text);
-      
-      // If final, send to reducer for scoring
-      if (isFinal) {
-        dispatch({ type: 'PROCESS_SPEECH', payload: text });
-        // Clear transcript after a delay so user sees what was processed
-        setTimeout(() => setLiveTranscript(""), 1000);
-      }
-  }, []);
-
-  // Root styles
-  const containerStyle = { fontSize: `${16 * state.fontSizeMultiplier}px` };
-  const bgClass = state.highContrast ? 'bg-black text-white' : 'bg-slate-50 text-slate-900';
-  const isTestActive = ![TestStage.DASHBOARD, TestStage.REGISTRATION, TestStage.PATIENT_DETAIL, TestStage.RESULTS].includes(state.stage);
-
-  const renderContent = () => {
-    switch (state.stage) {
-      case TestStage.DASHBOARD: 
-        // ... (Dashboard same as before, abbreviated for space)
-        const filteredPatients = allPatients.filter(p => p.name.toLowerCase().includes(searchTerm.toLowerCase()));
-        return (
-            <div className="max-w-6xl mx-auto space-y-8 p-6">
-                <div className="flex flex-col md:flex-row justify-between items-center gap-4">
-                    <div><h2 className="text-3xl font-bold text-medical-900">Pacientes</h2></div>
-                    <button onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.REGISTRATION })} className="bg-medical-600 text-white px-6 py-4 rounded-xl font-bold text-lg">+ Novo Teste</button>
+        <div className="min-h-screen p-6 bg-gradient-to-b from-blue-50 to-white">
+            <div className="max-w-2xl mx-auto">
+                <div className="text-center mb-8">
+                    <div className="text-6xl mb-4">📊</div>
+                    <h2 className="text-3xl font-bold text-blue-900">
+                        Resultados
+                    </h2>
+                    <p className="text-xl text-gray-600 mt-2">{patient.name}</p>
+                    <p className="text-gray-500">{new Date(scores.date).toLocaleDateString('pt-BR')}</p>
                 </div>
-                <div className="bg-white p-4 rounded-xl border border-slate-200"><input type="text" placeholder="🔍 Buscar..." className="w-full p-4 border rounded-xl" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /></div>
-                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-                    {filteredPatients.map(p => (
-                        <div key={p.id} className="bg-white p-6 rounded-2xl shadow-sm border hover:shadow-md">
-                            <h3 className="font-bold text-xl mb-1">{p.name}</h3><p className="text-sm text-slate-500 mb-4">{p.age} anos</p>
-                            <button onClick={() => { dispatch({ type: 'SET_CURRENT_PATIENT', payload: p.id }); dispatch({ type: 'SET_VIEW', payload: TestStage.PATIENT_DETAIL }); }} className="w-full bg-slate-100 py-3 rounded-xl font-bold text-slate-700">Ver Histórico</button>
+
+                <div className="space-y-4 mb-8">
+                    {results.map((r, idx) => (
+                        <div key={idx} className="bg-white p-6 rounded-2xl shadow-md border-2 border-gray-100 flex items-center gap-4">
+                            <span className="text-4xl">{r.icon}</span>
+                            <div className="flex-1">
+                                <p className="font-medium text-gray-600">{r.label}</p>
+                                <p className="text-3xl font-black text-blue-700">
+                                    {r.value}
+                                    {r.max && <span className="text-lg text-gray-400">/{r.max}</span>}
+                                </p>
+                            </div>
                         </div>
                     ))}
                 </div>
+
+                <BigButton
+                    onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.DASHBOARD })}
+                    variant="primary"
+                    icon="🏠"
+                >
+                    VOLTAR AO INÍCIO
+                </BigButton>
             </div>
-        );
-      case TestStage.PATIENT_DETAIL: 
-          const patient = getPatientById(state.currentPatientId!);
-          if (!patient) return null;
-          return (
-              <div className="max-w-5xl mx-auto space-y-8 p-6">
-                  <button onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.DASHBOARD })} className="text-medical-600 font-bold">← Voltar</button>
-                  <div className="flex justify-between bg-white p-8 rounded-3xl shadow-sm border"><h2 className="text-3xl font-bold">{patient.name}</h2><button onClick={() => dispatch({ type: 'START_TEST_SETUP', payload: patient.id })} className="bg-medical-600 text-white px-8 py-4 rounded-xl font-bold text-xl">Iniciar Teste</button></div>
-              </div>
-          );
-      case TestStage.REGISTRATION: 
-          // ... Registration Form ...
-          return (
-            <div className="flex items-center justify-center min-h-[80vh]">
-                <div className="max-w-lg w-full bg-white p-10 rounded-3xl shadow-2xl">
-                    <h2 className="text-3xl font-bold mb-8">Cadastro</h2>
-                    <div className="space-y-6">
-                        <input type="text" placeholder="Nome" className="w-full rounded-xl border p-4" value={state.tempPatientData.name} onChange={(e) => dispatch({ type: 'UPDATE_TEMP_PATIENT', payload: { name: e.target.value } })} />
-                        <input type="number" placeholder="Idade" className="w-full rounded-xl border p-4" value={state.tempPatientData.age || ''} onChange={(e) => dispatch({ type: 'UPDATE_TEMP_PATIENT', payload: { age: parseInt(e.target.value) } })} />
-                        <select className="w-full rounded-xl border p-4 bg-white" value={state.tempPatientData.education} onChange={(e) => dispatch({ type: 'UPDATE_TEMP_PATIENT', payload: { education: e.target.value as EducationLevel } })}>
-                            <option value={EducationLevel.LOW}>1-7 Anos</option><option value={EducationLevel.HIGH}>≥ 8 Anos</option><option value={EducationLevel.ILLITERATE}>Analfabeto</option>
-                        </select>
-                        <div className="flex gap-4"><button onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.DASHBOARD })} className="w-1/2 bg-slate-100 py-4 rounded-xl font-bold">Cancelar</button><button onClick={() => { if(state.tempPatientData.name) { const p = createPatient(state.tempPatientData.name!, state.tempPatientData.age!, state.tempPatientData.education); dispatch({ type: 'START_TEST_SETUP', payload: p.id }); } }} className="w-1/2 bg-medical-600 text-white py-4 rounded-xl font-bold">Continuar</button></div>
-                    </div>
+        </div>
+    );
+};
+
+// Dashboard de pacientes
+const PatientDashboard: React.FC<{
+    patients: Patient[];
+    dispatch: React.Dispatch<Action>;
+}> = ({ patients, dispatch }) => {
+    const [searchTerm, setSearchTerm] = useState('');
+
+    const filteredPatients = patients.filter(p =>
+        p.name.toLowerCase().includes(searchTerm.toLowerCase())
+    );
+
+    return (
+        <div className="min-h-screen p-6 bg-gradient-to-b from-blue-50 to-white">
+            <div className="max-w-4xl mx-auto">
+                <div className="flex items-center justify-between mb-6">
+                    <h2 className="text-3xl font-bold text-blue-900">Pacientes</h2>
+                    <BigButton
+                        onClick={() => dispatch({ type: 'SET_VIEW', payload: TestStage.REGISTRATION })}
+                        variant="success"
+                        icon="+"
+                        className="w-auto"
+                    >
+                        Novo
+                    </BigButton>
+                </div>
+
+                <div className="mb-6">
+                    <input
+                        type="text"
+                        placeholder="🔍 Buscar paciente..."
+                        value={searchTerm}
+                        onChange={(e) => setSearchTerm(e.target.value)}
+                        className="w-full p-5 text-xl border-2 border-gray-300 rounded-xl focus:border-blue-500"
+                    />
+                </div>
+
+                <div className="space-y-4">
+                    {filteredPatients.map(p => (
+                        <div
+                            key={p.id}
+                            className="bg-white p-6 rounded-2xl shadow-md border-2 border-gray-100 flex items-center justify-between"
+                        >
+                            <div>
+                                <h3 className="text-2xl font-bold text-gray-800">{p.name}</h3>
+                                <p className="text-gray-500">{p.age} anos • {p.history.length} teste(s)</p>
+                            </div>
+                            <button
+                                onClick={() => {
+                                    dispatch({ type: 'SET_CURRENT_PATIENT', payload: p.id });
+                                    dispatch({ type: 'START_TEST_SETUP', payload: p.id });
+                                }}
+                                className="bg-blue-600 text-white px-6 py-4 rounded-xl font-bold text-lg hover:bg-blue-500"
+                            >
+                                Iniciar Teste
+                            </button>
+                        </div>
+                    ))}
+
+                    {filteredPatients.length === 0 && (
+                        <div className="text-center py-12 text-gray-400">
+                            <p className="text-xl">Nenhum paciente encontrado</p>
+                        </div>
+                    )}
                 </div>
             </div>
-          );
-      case TestStage.PRE_TEST_CHECK: 
-        return <PreTestCheck dispatch={dispatch} onEnableMic={() => setIsMicGlobalActive(true)} liveTranscript={liveTranscript} />;
-      case TestStage.POST_TEST_CHECK: 
-        return <PostTestCheck currentPatientId={state.currentPatientId} scores={state.scores} dispatch={dispatch} />;
-      
-      // Test Phases using new Global Mic prop
-      case TestStage.NAMING:
-        return <MemoryPhase key="naming" title="1. Nomeação" instruction="Diga o nome das figuras." scoreKey="naming" scoreValue={state.scores.naming} foundWords={state.currentStageFoundWords} nextStage={TestStage.INCIDENTAL_MEMORY} stage={state.stage} dispatch={dispatch} highContrast={state.highContrast} setMicActive={setIsMicGlobalActive} liveTranscript={liveTranscript} />;
-      case TestStage.INCIDENTAL_MEMORY:
-        return <MemoryPhase key="incidental" title="2. Memória Incidental" instruction="Quais figuras você acabou de ver?" scoreKey="incidentalMemory" scoreValue={state.scores.incidentalMemory} foundWords={state.currentStageFoundWords} nextStage={TestStage.IMMEDIATE_MEMORY} stage={state.stage} dispatch={dispatch} highContrast={state.highContrast} setMicActive={setIsMicGlobalActive} liveTranscript={liveTranscript} />;
-      case TestStage.IMMEDIATE_MEMORY:
-        return <MemoryPhase key="immediate" title="3. Memória Imediata" instruction="Memorize estas figuras por 30 segundos." scoreKey="immediateMemory" scoreValue={state.scores.immediateMemory} foundWords={state.currentStageFoundWords} nextStage={TestStage.LEARNING} stage={state.stage} dispatch={dispatch} highContrast={state.highContrast} setMicActive={setIsMicGlobalActive} liveTranscript={liveTranscript} />;
-      case TestStage.LEARNING:
-        return <MemoryPhase key="learning" title="4. Aprendizado" instruction="Memorize novamente." scoreKey="learning" scoreValue={state.scores.learning} foundWords={state.currentStageFoundWords} nextStage={TestStage.VERBAL_FLUENCY} stage={state.stage} dispatch={dispatch} highContrast={state.highContrast} setMicActive={setIsMicGlobalActive} liveTranscript={liveTranscript} />;
-      case TestStage.DELAYED_MEMORY:
-        return <MemoryPhase key="delayed" title="5. Memória Tardia" instruction="Quais figuras eu mostrei 5 minutos atrás?" scoreKey="delayedMemory" scoreValue={state.scores.delayedMemory} foundWords={state.currentStageFoundWords} nextStage={TestStage.RECOGNITION} stage={state.stage} dispatch={dispatch} highContrast={state.highContrast} setMicActive={setIsMicGlobalActive} liveTranscript={liveTranscript} delayStart={state.timeStartedDelayed} />;
-      
-      case TestStage.VERBAL_FLUENCY:
-        return <FluencyPhase key="fluency" list={state.verbalFluencyList} dispatch={dispatch} highContrast={state.highContrast} setMicActive={setIsMicGlobalActive} liveTranscript={liveTranscript} />;
-      
-      case TestStage.CLOCK_DRAWING:
-        return <ClockPhase key="clock" dispatch={dispatch} highContrast={state.highContrast} />;
-      case TestStage.RECOGNITION:
-        return <RecognitionPhase key="recognition" dispatch={dispatch} highContrast={state.highContrast} foundWords={state.currentStageFoundWords} responses={state.currentStageResponses} setMicActive={setIsMicGlobalActive} liveTranscript={liveTranscript} />;
-      case TestStage.RESULTS:
-        return <Results scores={state.scores} currentPatientId={state.currentPatientId} dispatch={dispatch} />;
-      default: return <div>...</div>;
-    }
-  };
+        </div>
+    );
+};
 
-  return (
-    <div className={`min-h-screen font-sans transition-colors duration-300 ${bgClass}`} style={containerStyle}>
-        
-        {/* GLOBAL VOICE RECORDER - PERSISTENT */}
-        <VoiceRecorder 
-            isListening={isMicGlobalActive} 
-            onResult={handleSpeechResult} 
-        />
+// ===========================================
+// COMPONENTE PRINCIPAL
+// ===========================================
 
-        <AccessibilityControls dispatch={dispatch} currentMultiplier={state.fontSizeMultiplier} highContrast={state.highContrast} />
-        {isTestActive && <ProgressBar stage={state.stage} />}
+const App: React.FC = () => {
+    const [state, dispatch] = useReducer(reducer, INITIAL_STATE);
+    const [allPatients, setAllPatients] = useState<Patient[]>([]);
 
-        {!isTestActive && (
-             <header className="border-b border-slate-200 py-4 px-6 mb-4 sticky top-0 z-20 bg-inherit">
-                <div className="max-w-7xl mx-auto flex justify-between items-center"><h1 className="text-xl font-black">BBRC Digital</h1></div>
-            </header>
-        )}
-        
-        <main className="animate-fade-in pb-20 pt-6">
-          {renderContent()}
-        </main>
-    </div>
-  );
+    // Estado global do microfone
+    const [isMicGlobalActive, setIsMicGlobalActive] = useState(false);
+    const [liveTranscript, setLiveTranscript] = useState("");
+
+    useEffect(() => {
+        setAllPatients(getPatients());
+        if (state.stage === TestStage.DASHBOARD) {
+            setIsMicGlobalActive(false);
+        }
+    }, [state.stage]);
+
+    const handleSpeechResult = useCallback((text: string, isFinal: boolean) => {
+        setLiveTranscript(text);
+
+        if (isFinal) {
+            dispatch({ type: 'PROCESS_SPEECH', payload: text });
+            setTimeout(() => setLiveTranscript(""), 1500);
+        }
+    }, []);
+
+    const containerStyle = { fontSize: `${18 * state.fontSizeMultiplier}px` };
+    const bgClass = state.highContrast ? 'bg-black text-white' : 'bg-slate-50 text-slate-900';
+
+    const renderContent = () => {
+        switch (state.stage) {
+            case TestStage.DASHBOARD:
+                if (allPatients.length === 0) {
+                    return <WelcomeScreen dispatch={dispatch} patients={allPatients} />;
+                }
+                return <PatientDashboard patients={allPatients} dispatch={dispatch} />;
+
+            case TestStage.REGISTRATION:
+                return <SimpleRegistration dispatch={dispatch} tempData={state.tempPatientData} />;
+
+            case TestStage.PRE_TEST_CHECK:
+                return <PreTestCheck dispatch={dispatch} onEnableMic={() => setIsMicGlobalActive(true)} liveTranscript={liveTranscript} />;
+
+            case TestStage.NAMING:
+                return <MemoryPhase
+                    key="naming"
+                    title="Nomeação"
+                    stepNumber={1}
+                    instruction="Diga o nome de cada figura que você vê."
+                    scoreKey="naming"
+                    foundWords={state.currentStageFoundWords}
+                    nextStage={TestStage.INCIDENTAL_MEMORY}
+                    stage={state.stage}
+                    dispatch={dispatch}
+                    highContrast={state.highContrast}
+                    setMicActive={setIsMicGlobalActive}
+                    liveTranscript={liveTranscript}
+                />;
+
+            case TestStage.INCIDENTAL_MEMORY:
+                return <MemoryPhase
+                    key="incidental"
+                    title="Memória Incidental"
+                    stepNumber={2}
+                    instruction="Quais figuras você acabou de ver? Diga em voz alta."
+                    scoreKey="incidentalMemory"
+                    foundWords={state.currentStageFoundWords}
+                    nextStage={TestStage.IMMEDIATE_MEMORY}
+                    stage={state.stage}
+                    dispatch={dispatch}
+                    highContrast={state.highContrast}
+                    setMicActive={setIsMicGlobalActive}
+                    liveTranscript={liveTranscript}
+                />;
+
+            case TestStage.IMMEDIATE_MEMORY:
+                return <MemoryPhase
+                    key="immediate"
+                    title="Memória Imediata"
+                    stepNumber={3}
+                    instruction="Olhe bem para as figuras e tente memorizar."
+                    scoreKey="immediateMemory"
+                    foundWords={state.currentStageFoundWords}
+                    nextStage={TestStage.LEARNING}
+                    stage={state.stage}
+                    dispatch={dispatch}
+                    highContrast={state.highContrast}
+                    setMicActive={setIsMicGlobalActive}
+                    liveTranscript={liveTranscript}
+                />;
+
+            case TestStage.LEARNING:
+                return <MemoryPhase
+                    key="learning"
+                    title="Aprendizado"
+                    stepNumber={4}
+                    instruction="Memorize as figuras mais uma vez."
+                    scoreKey="learning"
+                    foundWords={state.currentStageFoundWords}
+                    nextStage={TestStage.VERBAL_FLUENCY}
+                    stage={state.stage}
+                    dispatch={dispatch}
+                    highContrast={state.highContrast}
+                    setMicActive={setIsMicGlobalActive}
+                    liveTranscript={liveTranscript}
+                />;
+
+            case TestStage.VERBAL_FLUENCY:
+                return <FluencyPhase
+                    key="fluency"
+                    list={state.verbalFluencyList}
+                    dispatch={dispatch}
+                    highContrast={state.highContrast}
+                    setMicActive={setIsMicGlobalActive}
+                    liveTranscript={liveTranscript}
+                />;
+
+            case TestStage.CLOCK_DRAWING:
+                return <ClockPhase
+                    key="clock"
+                    dispatch={dispatch}
+                    highContrast={state.highContrast}
+                />;
+
+            case TestStage.DELAYED_MEMORY:
+                return <MemoryPhase
+                    key="delayed"
+                    title="Memória Tardia"
+                    stepNumber={7}
+                    instruction="Quais figuras eu mostrei há alguns minutos? Diga em voz alta."
+                    scoreKey="delayedMemory"
+                    foundWords={state.currentStageFoundWords}
+                    nextStage={TestStage.RECOGNITION}
+                    stage={state.stage}
+                    dispatch={dispatch}
+                    highContrast={state.highContrast}
+                    setMicActive={setIsMicGlobalActive}
+                    liveTranscript={liveTranscript}
+                    delayStart={state.timeStartedDelayed}
+                />;
+
+            case TestStage.RECOGNITION:
+                return <RecognitionPhase
+                    key="recognition"
+                    dispatch={dispatch}
+                    highContrast={state.highContrast}
+                    foundWords={state.currentStageFoundWords}
+                    responses={state.currentStageResponses}
+                    setMicActive={setIsMicGlobalActive}
+                    liveTranscript={liveTranscript}
+                />;
+
+            case TestStage.POST_TEST_CHECK:
+                return <PostTestCheck
+                    currentPatientId={state.currentPatientId}
+                    scores={state.scores}
+                    dispatch={dispatch}
+                />;
+
+            case TestStage.RESULTS:
+                return <Results
+                    scores={state.scores}
+                    currentPatientId={state.currentPatientId!}
+                    dispatch={dispatch}
+                />;
+
+            default:
+                return <WelcomeScreen dispatch={dispatch} patients={allPatients} />;
+        }
+    };
+
+    return (
+        <div className={`min-h-screen font-sans transition-colors duration-300 ${bgClass}`} style={containerStyle}>
+            <VoiceRecorder
+                isListening={isMicGlobalActive}
+                onResult={handleSpeechResult}
+            />
+
+            <main>
+                {renderContent()}
+            </main>
+        </div>
+    );
 };
 
 export default App;
