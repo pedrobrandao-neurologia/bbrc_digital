@@ -878,13 +878,28 @@ const FluencyPhase: React.FC<{
     );
 };
 
-// Fase do Relogio
+// Escala de Sunderland para pontuação do relógio
+const SUNDERLAND_SCALE = [
+    { score: 10, label: "10 - Perfeito", description: "Relógio perfeito, ponteiros corretos em 11:10" },
+    { score: 9, label: "9", description: "Pequenos erros no posicionamento dos ponteiros" },
+    { score: 8, label: "8", description: "Erros mais visíveis nos ponteiros" },
+    { score: 7, label: "7", description: "Ponteiros completamente errados" },
+    { score: 6, label: "6", description: "Uso inadequado dos ponteiros" },
+    { score: 5, label: "5", description: "Números invertidos ou em um hemisfério" },
+    { score: 4, label: "4", description: "Números fora do relógio" },
+    { score: 3, label: "3", description: "Números e relógio desconectados" },
+    { score: 2, label: "2", description: "Tentativa sem semelhança com relógio" },
+    { score: 1, label: "1", description: "Não compreendeu a tarefa" },
+    { score: 0, label: "0", description: "Não tentou ou recusou" },
+];
+
+// Fase do Relogio - Escala de Sunderland (0-10)
 const ClockPhase: React.FC<{
     dispatch: React.Dispatch<Action>;
     highContrast: boolean;
 }> = ({ dispatch, highContrast }) => {
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [manualScore, setManualScore] = useState(3);
+    const [manualScore, setManualScore] = useState(5);
     const [scoreApplied, setScoreApplied] = useState(false);
 
     useEffect(() => {
@@ -903,12 +918,15 @@ const ClockPhase: React.FC<{
 
         if (base64 && isGeminiConfigured) {
             setIsAnalyzing(true);
-            const score = await analyzeClockDrawing(base64);
-            applyScore(score);
+            // Gemini retorna 0-5, convertemos para 0-10 (Sunderland)
+            const geminiScore = await analyzeClockDrawing(base64);
+            const sunderlandScore = Math.round(geminiScore * 2); // Converte 0-5 para 0-10
+            applyScore(sunderlandScore);
             setIsAnalyzing(false);
         }
     };
 
+    const currentCriteria = SUNDERLAND_SCALE.find(s => s.score === manualScore);
     const progressLabels = ['Nome', 'M1', 'M2', 'M3', 'Animais', 'Relógio', 'M4', 'Reconh'];
 
     return (
@@ -939,23 +957,66 @@ const ClockPhase: React.FC<{
                         </div>
                     )}
 
-                    <div className={`w-full max-w-md p-6 rounded-2xl ${highContrast ? 'bg-gray-900 border border-white' : 'bg-white border-2 border-gray-200'}`}>
-                        <p className="font-bold text-xl mb-4 text-center">Pontuação: 0 a 5</p>
-                        <div className="flex items-center gap-4 mb-4">
-                            <input
-                                type="range"
-                                min={0}
-                                max={5}
-                                step={1}
-                                value={manualScore}
-                                onChange={(e) => setManualScore(Number(e.target.value))}
-                                className="flex-1 h-3"
-                                disabled={isAnalyzing}
-                            />
-                            <div className={`w-16 h-16 rounded-xl flex items-center justify-center text-3xl font-black ${scoreApplied ? 'bg-green-500 text-white' : 'bg-gray-100 text-gray-800'}`}>
+                    {/* Escala de Sunderland */}
+                    <div className={`w-full max-w-2xl p-6 rounded-2xl ${highContrast ? 'bg-gray-900 border border-white' : 'bg-white border-2 border-gray-200'}`}>
+                        <div className="text-center mb-4">
+                            <p className="font-bold text-xl">Escala de Sunderland</p>
+                            <p className="text-sm text-gray-500">Pontuação de 0 a 10</p>
+                        </div>
+
+                        {/* Score Display */}
+                        <div className="flex items-center justify-center gap-4 mb-4">
+                            <div className={`w-20 h-20 rounded-2xl flex items-center justify-center text-4xl font-black ${scoreApplied ? 'bg-green-500 text-white' : 'bg-blue-100 text-blue-800'}`}>
                                 {manualScore}
                             </div>
                         </div>
+
+                        {/* Criteria description */}
+                        {currentCriteria && (
+                            <div className={`text-center p-3 rounded-xl mb-4 ${highContrast ? 'bg-gray-800' : 'bg-blue-50'}`}>
+                                <p className="font-medium">{currentCriteria.description}</p>
+                            </div>
+                        )}
+
+                        {/* Slider */}
+                        <div className="mb-4">
+                            <input
+                                type="range"
+                                min={0}
+                                max={10}
+                                step={1}
+                                value={manualScore}
+                                onChange={(e) => setManualScore(Number(e.target.value))}
+                                className="w-full h-4 rounded-lg appearance-none cursor-pointer"
+                                style={{
+                                    background: `linear-gradient(to right, #ef4444 0%, #f59e0b 30%, #22c55e 70%, #22c55e 100%)`
+                                }}
+                                disabled={isAnalyzing}
+                            />
+                            <div className="flex justify-between text-sm text-gray-500 mt-1">
+                                <span>0</span>
+                                <span>5</span>
+                                <span>10</span>
+                            </div>
+                        </div>
+
+                        {/* Quick select buttons */}
+                        <div className="grid grid-cols-6 gap-2 mb-4">
+                            {[10, 8, 6, 4, 2, 0].map((score) => (
+                                <button
+                                    key={score}
+                                    onClick={() => setManualScore(score)}
+                                    className={`py-2 rounded-lg font-bold text-lg transition-all
+                                        ${manualScore === score
+                                            ? 'bg-blue-600 text-white ring-2 ring-blue-300'
+                                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                                    disabled={isAnalyzing}
+                                >
+                                    {score}
+                                </button>
+                            ))}
+                        </div>
+
                         <BigButton
                             onClick={() => applyScore(manualScore)}
                             disabled={isAnalyzing}
@@ -1162,7 +1223,7 @@ const Results: React.FC<{
         { label: 'Memória Imediata', value: scores.immediateMemory, max: 10, icon: '🧠' },
         { label: 'Memória Tardia', value: scores.delayedMemory, max: 10, icon: '💭' },
         { label: 'Fluência Verbal', value: scores.verbalFluency, max: null, icon: '🗣️' },
-        { label: 'Desenho do Relógio', value: scores.clockDrawing, max: 5, icon: '🕐' },
+        { label: 'Desenho do Relógio (Sunderland)', value: scores.clockDrawing, max: 10, icon: '🕐' },
         { label: 'Reconhecimento', value: scores.recognition, max: 10, icon: '👁️' },
     ];
 
