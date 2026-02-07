@@ -588,6 +588,7 @@ const PreTestCheck: React.FC<{
 };
 
 // Fase de Memoria (Nomeacao, Incidental, Imediata, Aprendizado, Tardia)
+// Inclui correção de nomeação conforme protocolo BBRC (Nitrini et al.)
 const MemoryPhase: React.FC<{
   title: string;
   stepNumber: number;
@@ -607,12 +608,17 @@ const MemoryPhase: React.FC<{
     const isNamingStage = stage === TestStage.NAMING;
     const initialMode = isTimedStudyStage ? 'MEMORIZE' : (isNamingStage ? 'NAMING_ACTIVE' : 'RECALL');
 
-    const [phaseMode, setPhaseMode] = useState<'MEMORIZE' | 'RECALL' | 'NAMING_ACTIVE'>(initialMode);
+    const [phaseMode, setPhaseMode] = useState<'MEMORIZE' | 'RECALL' | 'NAMING_ACTIVE' | 'NAMING_CORRECTION'>(initialMode);
     const [timeLeft, setTimeLeft] = useState(30);
     const [remainingDelay, setRemainingDelay] = useState(0);
     const [lastFoundCount, setLastFoundCount] = useState(0);
 
     const minDelayMs = 5 * 60 * 1000;
+
+    // Compute missed items for naming correction
+    const missedItems = isNamingStage
+        ? TARGET_WORDS.filter(w => !foundWords.includes(w))
+        : [];
 
     // Feedback sonoro quando encontra palavra
     useEffect(() => {
@@ -641,12 +647,20 @@ const MemoryPhase: React.FC<{
     // Mic control
     useEffect(() => {
         const delayBlocked = stage === TestStage.DELAYED_MEMORY && remainingDelay > 0;
-        if (phaseMode === 'MEMORIZE' || delayBlocked) {
+        if (phaseMode === 'MEMORIZE' || phaseMode === 'NAMING_CORRECTION' || delayBlocked) {
             setMicActive(false);
         } else {
             setMicActive(true);
         }
     }, [phaseMode, setMicActive, stage, remainingDelay]);
+
+    // TTS for naming correction
+    useEffect(() => {
+        if (phaseMode === 'NAMING_CORRECTION' && missedItems.length > 0) {
+            const correctionText = `Estas são as figuras que faltaram: ${missedItems.join(', ')}. Olhe para as figuras e memorize os nomes.`;
+            speakText(correctionText, 0.75);
+        }
+    }, [phaseMode]);
 
     // TTS
     useEffect(() => {
@@ -654,7 +668,7 @@ const MemoryPhase: React.FC<{
             speakText("Agora, diga em voz alta quais figuras você viu.", 0.8);
         } else if (phaseMode === 'MEMORIZE') {
             speakText("Olhe bem para as figuras. Você tem 30 segundos para memorizar.", 0.8);
-        } else {
+        } else if (phaseMode === 'NAMING_ACTIVE') {
             speakText(instruction, 0.8);
         }
     }, [phaseMode, instruction]);
@@ -671,15 +685,25 @@ const MemoryPhase: React.FC<{
         return () => clearInterval(interval);
     }, [isTimedStudyStage, phaseMode, timeLeft]);
 
-    const showImage = phaseMode === 'MEMORIZE' || phaseMode === 'NAMING_ACTIVE';
+    const showImage = phaseMode === 'MEMORIZE' || phaseMode === 'NAMING_ACTIVE' || phaseMode === 'NAMING_CORRECTION';
     const delayBlocked = stage === TestStage.DELAYED_MEMORY && remainingDelay > 0;
     const delaySeconds = Math.max(0, Math.ceil(remainingDelay / 1000));
 
     const progressLabels = ['Nome', 'M1', 'M2', 'M3', 'Animais', 'Relógio', 'M4', 'Reconh'];
 
+    // Handle "next" click during naming - check for corrections
+    const handleNamingNext = () => {
+        if (isNamingStage && phaseMode === 'NAMING_ACTIVE' && missedItems.length > 0) {
+            // Per BBRC protocol: correct naming errors before proceeding
+            setPhaseMode('NAMING_CORRECTION');
+            return;
+        }
+        dispatch({ type: 'SET_VIEW', payload: nextStage });
+    };
+
     return (
         <div className={`min-h-screen ${highContrast ? 'bg-black text-white' : 'bg-gradient-to-b from-blue-50 to-white'}`}>
-            <MicrophoneIndicator isActive={phaseMode !== 'MEMORIZE' && !delayBlocked} transcript={liveTranscript} />
+            <MicrophoneIndicator isActive={phaseMode !== 'MEMORIZE' && phaseMode !== 'NAMING_CORRECTION' && !delayBlocked} transcript={liveTranscript} />
 
             <div className="max-w-4xl mx-auto p-4 pt-20">
                 <ProgressSteps current={stepNumber - 1} total={8} labels={progressLabels} />
@@ -691,8 +715,16 @@ const MemoryPhase: React.FC<{
                 </div>
 
                 <InstructionCard
-                    instruction={phaseMode === 'MEMORIZE' ? 'Memorize as figuras abaixo.' : instruction}
-                    onSpeak={() => speakText(instruction, 0.8)}
+                    instruction={
+                        phaseMode === 'MEMORIZE' ? 'Memorize as figuras abaixo.'
+                        : phaseMode === 'NAMING_CORRECTION' ? 'Veja os nomes corretos das figuras que faltaram antes de continuar.'
+                        : instruction
+                    }
+                    onSpeak={() => speakText(
+                        phaseMode === 'NAMING_CORRECTION'
+                            ? `Estas são as figuras que faltaram: ${missedItems.join(', ')}`
+                            : instruction, 0.8
+                    )}
                     highContrast={highContrast}
                 />
 
@@ -714,6 +746,25 @@ const MemoryPhase: React.FC<{
                 {showImage && (
                     <div className="my-6 bg-white rounded-3xl shadow-xl p-4 border-4 border-gray-200">
                         <img src={recallSheet} alt="Figuras do teste" className="w-full h-auto max-h-[400px] object-contain mx-auto" />
+                    </div>
+                )}
+
+                {/* Naming correction: show missed items with their correct names */}
+                {phaseMode === 'NAMING_CORRECTION' && missedItems.length > 0 && (
+                    <div className="mb-6 p-6 bg-yellow-50 border-4 border-yellow-400 rounded-2xl">
+                        <p className="text-xl font-bold text-yellow-800 mb-4 text-center">
+                            Figuras não nomeadas - memorize os nomes:
+                        </p>
+                        <div className="flex flex-wrap gap-3 justify-center">
+                            {missedItems.map((item, idx) => (
+                                <span key={idx} className="inline-flex items-center gap-2 bg-yellow-200 text-yellow-900 px-5 py-3 rounded-xl text-xl font-bold shadow-md">
+                                    <span className="capitalize">{item}</span>
+                                </span>
+                            ))}
+                        </div>
+                        <p className="text-sm text-yellow-700 mt-4 text-center">
+                            Conforme protocolo BBRC, os nomes corretos são apresentados para garantir a codificação adequada.
+                        </p>
                     </div>
                 )}
 
@@ -742,13 +793,25 @@ const MemoryPhase: React.FC<{
                             <BigButton onClick={() => setPhaseMode('RECALL')} variant="secondary">
                                 Pular Tempo
                             </BigButton>
+                        ) : phaseMode === 'NAMING_CORRECTION' ? (
+                            <BigButton
+                                onClick={() => dispatch({ type: 'SET_VIEW', payload: nextStage })}
+                                variant="success"
+                                icon="→"
+                            >
+                                CONTINUAR
+                            </BigButton>
                         ) : (
                             <BigButton
                                 onClick={() => {
                                     if (title.includes("Aprendizado")) {
                                         dispatch({ type: 'START_DELAY_TIMER' });
                                     }
-                                    dispatch({ type: 'SET_VIEW', payload: nextStage });
+                                    if (isNamingStage) {
+                                        handleNamingNext();
+                                    } else {
+                                        dispatch({ type: 'SET_VIEW', payload: nextStage });
+                                    }
                                 }}
                                 disabled={delayBlocked}
                                 variant="success"
@@ -878,32 +941,30 @@ const FluencyPhase: React.FC<{
     );
 };
 
-// Escala de Sunderland para pontuação do relógio
-const SUNDERLAND_SCALE = [
-    { score: 10, label: "10 - Perfeito", description: "Relógio perfeito, ponteiros corretos em 11:10" },
-    { score: 9, label: "9", description: "Pequenos erros no posicionamento dos ponteiros" },
-    { score: 8, label: "8", description: "Erros mais visíveis nos ponteiros" },
-    { score: 7, label: "7", description: "Ponteiros completamente errados" },
-    { score: 6, label: "6", description: "Uso inadequado dos ponteiros" },
-    { score: 5, label: "5", description: "Números invertidos ou em um hemisfério" },
-    { score: 4, label: "4", description: "Números fora do relógio" },
-    { score: 3, label: "3", description: "Números e relógio desconectados" },
-    { score: 2, label: "2", description: "Tentativa sem semelhança com relógio" },
-    { score: 1, label: "1", description: "Não compreendeu a tarefa" },
-    { score: 0, label: "0", description: "Não tentou ou recusou" },
+// Escala de Shulman para pontuação do desenho do relógio (0-5)
+// Referência: Nitrini et al., conforme BBRC original
+const SHULMAN_SCALE = [
+    { score: 5, label: "5 - Perfeito", description: "Relógio perfeito: números na posição correta, ponteiros marcando 11:10" },
+    { score: 4, label: "4 - Erro visuoespacial mínimo", description: "Pequeno erro visuoespacial (espaçamento leve), hora ainda representável" },
+    { score: 3, label: "3 - Hora incorreta", description: "Representação inadequada do horário 11:10, sem grande alteração visuoespacial" },
+    { score: 2, label: "2 - Desorganização moderada", description: "Erro visuoespacial moderado que impossibilita a indicação dos ponteiros" },
+    { score: 1, label: "1 - Desorganização severa", description: "Grande desorganização visuoespacial dos números e/ou ponteiros" },
+    { score: 0, label: "0 - Incapaz", description: "Incapacidade para representar qualquer imagem que lembre um relógio" },
 ];
 
-// Fase do Relogio - Escala de Sunderland (0-10)
+// Fase do Relogio - Escala de Shulman (0-5)
 const ClockPhase: React.FC<{
     dispatch: React.Dispatch<Action>;
     highContrast: boolean;
 }> = ({ dispatch, highContrast }) => {
     const [isAnalyzing, setIsAnalyzing] = useState(false);
-    const [manualScore, setManualScore] = useState(5);
+    const [aiReasoning, setAiReasoning] = useState<string | null>(null);
+    const [manualScore, setManualScore] = useState(3);
     const [scoreApplied, setScoreApplied] = useState(false);
+    const [hasDrawing, setHasDrawing] = useState(false);
 
     useEffect(() => {
-        speakText("Desenhe um relógio grande, com todos os números. Coloque os ponteiros marcando 11 horas e 10 minutos.", 0.8);
+        speakText("Desenhe um círculo grande, como o mostrador de um relógio. Coloque todos os números. Depois, coloque os ponteiros marcando 11 horas e 10 minutos.", 0.8);
     }, []);
 
     const applyScore = (score: number) => {
@@ -915,18 +976,26 @@ const ClockPhase: React.FC<{
 
     const handleSave = async (base64: string) => {
         dispatch({ type: 'SET_CLOCK_IMAGE', payload: base64 });
+        setHasDrawing(!!base64);
 
         if (base64 && isGeminiConfigured) {
             setIsAnalyzing(true);
-            // Gemini retorna 0-5, convertemos para 0-10 (Sunderland)
-            const geminiScore = await analyzeClockDrawing(base64);
-            const sunderlandScore = Math.round(geminiScore * 2); // Converte 0-5 para 0-10
-            applyScore(sunderlandScore);
+            setAiReasoning(null);
+            try {
+                const result = await analyzeClockDrawing(base64);
+                const shulmanScore = Math.max(0, Math.min(5, result.score));
+                applyScore(shulmanScore);
+                if (result.reasoning) {
+                    setAiReasoning(result.reasoning);
+                }
+            } catch {
+                // Fallback: user scores manually
+            }
             setIsAnalyzing(false);
         }
     };
 
-    const currentCriteria = SUNDERLAND_SCALE.find(s => s.score === manualScore);
+    const currentCriteria = SHULMAN_SCALE.find(s => s.score === manualScore);
     const progressLabels = ['Nome', 'M1', 'M2', 'M3', 'Animais', 'Relógio', 'M4', 'Reconh'];
 
     return (
@@ -941,8 +1010,8 @@ const ClockPhase: React.FC<{
                 </div>
 
                 <InstructionCard
-                    instruction="Desenhe um relógio com todos os números, marcando 11 horas e 10 minutos."
-                    onSpeak={() => speakText("Desenhe um relógio com todos os números, marcando 11 horas e 10 minutos.", 0.8)}
+                    instruction="Desenhe um círculo grande como o mostrador de um relógio. Coloque todos os números e os ponteiros marcando 11 horas e 10 minutos."
+                    onSpeak={() => speakText("Desenhe um círculo grande como o mostrador de um relógio. Coloque todos os números e os ponteiros marcando 11 horas e 10 minutos.", 0.8)}
                     highContrast={highContrast}
                 />
 
@@ -953,15 +1022,15 @@ const ClockPhase: React.FC<{
 
                     {isAnalyzing && (
                         <div className="bg-blue-100 text-blue-800 px-6 py-4 rounded-xl font-bold animate-pulse text-xl">
-                            Analisando desenho...
+                            Analisando desenho com IA...
                         </div>
                     )}
 
-                    {/* Escala de Sunderland */}
+                    {/* Escala de Shulman (0-5) */}
                     <div className={`w-full max-w-2xl p-6 rounded-2xl ${highContrast ? 'bg-gray-900 border border-white' : 'bg-white border-2 border-gray-200'}`}>
                         <div className="text-center mb-4">
-                            <p className="font-bold text-xl">Escala de Sunderland</p>
-                            <p className="text-sm text-gray-500">Pontuação de 0 a 10</p>
+                            <p className="font-bold text-xl">Critérios de Shulman</p>
+                            <p className="text-sm text-gray-500">Pontuação de 0 a 5</p>
                         </div>
 
                         {/* Score Display */}
@@ -969,60 +1038,64 @@ const ClockPhase: React.FC<{
                             <div className={`w-20 h-20 rounded-2xl flex items-center justify-center text-4xl font-black ${scoreApplied ? 'bg-green-500 text-white' : 'bg-blue-100 text-blue-800'}`}>
                                 {manualScore}
                             </div>
+                            <span className="text-2xl text-gray-400 font-bold">/5</span>
                         </div>
 
                         {/* Criteria description */}
                         {currentCriteria && (
                             <div className={`text-center p-3 rounded-xl mb-4 ${highContrast ? 'bg-gray-800' : 'bg-blue-50'}`}>
-                                <p className="font-medium">{currentCriteria.description}</p>
+                                <p className="font-bold text-lg">{currentCriteria.label}</p>
+                                <p className="font-medium text-sm mt-1">{currentCriteria.description}</p>
                             </div>
                         )}
 
-                        {/* Slider */}
-                        <div className="mb-4">
-                            <input
-                                type="range"
-                                min={0}
-                                max={10}
-                                step={1}
-                                value={manualScore}
-                                onChange={(e) => setManualScore(Number(e.target.value))}
-                                className="w-full h-4 rounded-lg appearance-none cursor-pointer"
-                                style={{
-                                    background: `linear-gradient(to right, #ef4444 0%, #f59e0b 30%, #22c55e 70%, #22c55e 100%)`
-                                }}
-                                disabled={isAnalyzing}
-                            />
-                            <div className="flex justify-between text-sm text-gray-500 mt-1">
-                                <span>0</span>
-                                <span>5</span>
-                                <span>10</span>
+                        {/* AI Reasoning */}
+                        {aiReasoning && (
+                            <div className={`text-left p-3 rounded-xl mb-4 ${highContrast ? 'bg-gray-800' : 'bg-green-50 border border-green-200'}`}>
+                                <p className="text-sm font-bold text-green-700 mb-1">Análise da IA:</p>
+                                <p className="text-sm text-green-800">{aiReasoning}</p>
                             </div>
+                        )}
+
+                        {/* Quick select buttons for Shulman 0-5 */}
+                        <div className="grid grid-cols-6 gap-2 mb-4">
+                            {[5, 4, 3, 2, 1, 0].map((score) => {
+                                const criteria = SHULMAN_SCALE.find(s => s.score === score);
+                                return (
+                                    <button
+                                        key={score}
+                                        onClick={() => setManualScore(score)}
+                                        className={`py-3 rounded-lg font-bold text-lg transition-all
+                                            ${manualScore === score
+                                                ? 'bg-blue-600 text-white ring-2 ring-blue-300'
+                                                : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
+                                        disabled={isAnalyzing}
+                                        title={criteria?.description}
+                                    >
+                                        {score}
+                                    </button>
+                                );
+                            })}
                         </div>
 
-                        {/* Quick select buttons */}
-                        <div className="grid grid-cols-6 gap-2 mb-4">
-                            {[10, 8, 6, 4, 2, 0].map((score) => (
-                                <button
-                                    key={score}
-                                    onClick={() => setManualScore(score)}
-                                    className={`py-2 rounded-lg font-bold text-lg transition-all
-                                        ${manualScore === score
-                                            ? 'bg-blue-600 text-white ring-2 ring-blue-300'
-                                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'}`}
-                                    disabled={isAnalyzing}
-                                >
-                                    {score}
-                                </button>
-                            ))}
-                        </div>
+                        {/* Shulman criteria reference */}
+                        <details className="mb-4">
+                            <summary className="cursor-pointer text-sm text-blue-600 font-medium">Ver todos os critérios</summary>
+                            <div className="mt-2 space-y-1">
+                                {SHULMAN_SCALE.map(c => (
+                                    <div key={c.score} className={`p-2 rounded text-sm ${manualScore === c.score ? 'bg-blue-100 font-bold' : 'bg-gray-50'}`}>
+                                        <span className="font-bold">{c.score}:</span> {c.description}
+                                    </div>
+                                ))}
+                            </div>
+                        </details>
 
                         <BigButton
                             onClick={() => applyScore(manualScore)}
-                            disabled={isAnalyzing}
+                            disabled={isAnalyzing || !hasDrawing}
                             variant={scoreApplied ? "success" : "primary"}
                         >
-                            {scoreApplied ? '✓ Pontuação Registrada' : 'Registrar Pontuação'}
+                            {scoreApplied ? 'Pontuação Registrada' : 'Registrar Pontuação'}
                         </BigButton>
                     </div>
                 </div>
@@ -1205,7 +1278,7 @@ const PostTestCheck: React.FC<{
     );
 };
 
-// Tela de Resultados
+// Tela de Resultados com todos os escores BBRC e indicadores de ponto de corte
 const Results: React.FC<{
     scores: BBRCScores;
     currentPatientId: string;
@@ -1219,13 +1292,23 @@ const Results: React.FC<{
 
     if (!patient) return null;
 
+    // Cutoff scores per ABN 2022 consensus (Smid et al.)
+    const fluencyCutoff = patient.education === EducationLevel.ILLITERATE ? 8
+        : patient.education === EducationLevel.LOW ? 11
+        : 12;
+
     const results = [
-        { label: 'Memória Imediata', value: scores.immediateMemory, max: 10, icon: '🧠' },
-        { label: 'Memória Tardia', value: scores.delayedMemory, max: 10, icon: '💭' },
-        { label: 'Fluência Verbal', value: scores.verbalFluency, max: null, icon: '🗣️' },
-        { label: 'Desenho do Relógio (Sunderland)', value: scores.clockDrawing, max: 10, icon: '🕐' },
-        { label: 'Reconhecimento', value: scores.recognition, max: 10, icon: '👁️' },
+        { label: 'Nomeação', value: scores.naming, max: 10, cutoff: null, icon: '🏷️' },
+        { label: 'Memória Incidental', value: scores.incidentalMemory, max: 10, cutoff: 4, icon: '💡' },
+        { label: 'Memória Imediata', value: scores.immediateMemory, max: 10, cutoff: 6, icon: '🧠' },
+        { label: 'Aprendizado', value: scores.learning, max: 10, cutoff: 6, icon: '📈' },
+        { label: 'Fluência Verbal (animais)', value: scores.verbalFluency, max: null, cutoff: fluencyCutoff, icon: '🗣️' },
+        { label: 'Desenho do Relógio (Shulman)', value: scores.clockDrawing, max: 5, cutoff: null, icon: '🕐' },
+        { label: 'Memória Tardia', value: scores.delayedMemory, max: 10, cutoff: 5, icon: '💭' },
+        { label: 'Reconhecimento', value: scores.recognition, max: 10, cutoff: 7, icon: '👁️' },
     ];
+
+    const belowCutoffCount = results.filter(r => r.cutoff !== null && r.value <= r.cutoff).length;
 
     return (
         <div className="min-h-screen p-6 bg-gradient-to-b from-blue-50 to-white">
@@ -1233,25 +1316,79 @@ const Results: React.FC<{
                 <div className="text-center mb-8">
                     <div className="text-6xl mb-4">📊</div>
                     <h2 className="text-3xl font-bold text-blue-900">
-                        Resultados
+                        Resultados BBRC
                     </h2>
                     <p className="text-xl text-gray-600 mt-2">{patient.name}</p>
+                    <p className="text-gray-500">
+                        {patient.age} anos | Escolaridade: {
+                            patient.education === EducationLevel.ILLITERATE ? 'Analfabeto'
+                            : patient.education === EducationLevel.LOW ? '1-7 anos'
+                            : '8+ anos'
+                        }
+                    </p>
                     <p className="text-gray-500">{new Date(scores.date).toLocaleDateString('pt-BR')}</p>
                 </div>
 
-                <div className="space-y-4 mb-8">
-                    {results.map((r, idx) => (
-                        <div key={idx} className="bg-white p-6 rounded-2xl shadow-md border-2 border-gray-100 flex items-center gap-4">
-                            <span className="text-4xl">{r.icon}</span>
-                            <div className="flex-1">
-                                <p className="font-medium text-gray-600">{r.label}</p>
-                                <p className="text-3xl font-black text-blue-700">
-                                    {r.value}
-                                    {r.max && <span className="text-lg text-gray-400">/{r.max}</span>}
-                                </p>
+                {/* Summary alert */}
+                {belowCutoffCount > 0 && (
+                    <div className="mb-6 p-4 bg-orange-50 border-2 border-orange-300 rounded-2xl">
+                        <p className="text-orange-800 font-bold text-lg text-center">
+                            {belowCutoffCount} escore(s) abaixo do ponto de corte
+                        </p>
+                        <p className="text-orange-600 text-sm text-center mt-1">
+                            Pontos de corte conforme consenso ABN 2022 (Smid et al.)
+                        </p>
+                    </div>
+                )}
+
+                <div className="space-y-3 mb-8">
+                    {results.map((r, idx) => {
+                        const belowCutoff = r.cutoff !== null && r.value <= r.cutoff;
+                        return (
+                            <div key={idx} className={`p-5 rounded-2xl shadow-md flex items-center gap-4
+                                ${belowCutoff
+                                    ? 'bg-red-50 border-2 border-red-300'
+                                    : 'bg-white border-2 border-gray-100'}`}
+                            >
+                                <span className="text-3xl">{r.icon}</span>
+                                <div className="flex-1">
+                                    <p className="font-medium text-gray-600 text-sm">{r.label}</p>
+                                    <p className={`text-3xl font-black ${belowCutoff ? 'text-red-600' : 'text-blue-700'}`}>
+                                        {r.value}
+                                        {r.max !== null && <span className="text-lg text-gray-400">/{r.max}</span>}
+                                    </p>
+                                </div>
+                                {r.cutoff !== null && (
+                                    <div className="text-right">
+                                        <p className="text-xs text-gray-500">Corte</p>
+                                        <p className={`text-lg font-bold ${belowCutoff ? 'text-red-500' : 'text-green-600'}`}>
+                                            {belowCutoff ? 'Abaixo' : 'Normal'}
+                                        </p>
+                                        <p className="text-xs text-gray-400">{`(> ${r.cutoff})`}</p>
+                                    </div>
+                                )}
                             </div>
-                        </div>
-                    ))}
+                        );
+                    })}
+                </div>
+
+                {/* Key clinical note - Delayed Memory */}
+                <div className="mb-6 p-4 bg-blue-50 border-2 border-blue-200 rounded-2xl">
+                    <p className="text-blue-800 font-bold text-sm mb-1">Nota clínica</p>
+                    <p className="text-blue-700 text-sm">
+                        A evocação tardia (Memória Tardia) é o subteste com maior acurácia diagnóstica
+                        para demência na BBRC (sensibilidade 93,3%, especificidade 96,6% com ponto de corte
+                        de 5 ou menos, conforme Nitrini et al., 1994/2007).
+                    </p>
+                </div>
+
+                {/* Disclaimer */}
+                <div className="mb-6 p-3 bg-gray-50 border border-gray-200 rounded-xl">
+                    <p className="text-gray-500 text-xs text-center">
+                        Este é um instrumento de rastreio cognitivo. Resultados abaixo do ponto de corte
+                        indicam necessidade de avaliação neuropsicológica e neurológica completa.
+                        Não substitui diagnóstico clínico profissional.
+                    </p>
                 </div>
 
                 <BigButton

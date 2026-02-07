@@ -856,17 +856,13 @@ export const ANIMAL_LIST = new Set([
   "bicho de goiaba",
 ]);
 
-// Escala de Sunderland para pontuação do desenho do relógio (0-10 pontos)
-export const SUNDERLAND_CRITERIA = [
-  { score: 10, description: "Relógio perfeito: números bem posicionados, ponteiros corretos marcando 11:10" },
-  { score: 9, description: "Pequenos erros visuais no posicionamento dos ponteiros" },
-  { score: 8, description: "Erros mais significativos na posição dos ponteiros" },
-  { score: 7, description: "Ponteiros completamente errados" },
-  { score: 6, description: "Uso inapropriado dos ponteiros (números circulados, escrita digital)" },
-  { score: 5, description: "Números em ordem inversa ou concentrados em um hemisfério" },
-  { score: 4, description: "Números fora do relógio ou distorção espacial significativa" },
-  { score: 3, description: "Números e relógio não conectados, ponteiros ausentes" },
-  { score: 2, description: "Algum esforço para fazer a tarefa mas sem semelhança com relógio" },
-  { score: 1, description: "Não compreendeu ou não tentou fazer a tarefa" },
-  { score: 0, description: "Recusou ou foi incapaz de fazer qualquer tentativa" }
+// Escala de Shulman para pontuação do desenho do relógio (0-5 pontos)
+// Conforme utilizado na BBRC original (Nitrini et al., 1994)
+export const SHULMAN_CRITERIA = [
+  { score: 5, description: "Desenho do relógio perfeito: números e ponteiros corretos marcando 11:10" },
+  { score: 4, description: "Mínimo erro visuoespacial: pequenos problemas de espaçamento, hora ainda representável" },
+  { score: 3, description: "Representação inadequada do horário 11:10, sem grande alteração visuoespacial" },
+  { score: 2, description: "Erro visuoespacial moderado, impossibilitando a indicação dos ponteiros" },
+  { score: 1, description: "Grande desorganização visuoespacial dos números e/ou ponteiros" },
+  { score: 0, description: "Incapacidade para representar qualquer imagem que lembre um relógio" }
 ];

@@ -10,7 +10,7 @@ Implementar a Bateria Breve de Rastreio Cognitivo (BBRC/BCSB) com aplicação pa
 4. **Memória imediata**: 30 s de exposição controlada + evocação livre.
 5. **Aprendizado**: nova exposição de 30 s + evocação livre; registra início do temporizador de 5 min para a tardia.
 6. **Fluência verbal (animais)**: 60 s de listagem livre com VAD/ASR aberto, deduplicação automática.
-7. **Desenho do relógio**: canvas interativo; aplicador atribui escore Shulman (0–5) ou usa análise assistiva.
+7. **Desenho do relógio**: canvas interativo; escore Shulman (0–5) atribuído via análise de IA (Gemini) ou manualmente. Critérios: 5=perfeito, 4=mínimo erro visuoespacial, 3=hora incorreta, 2=desorganização moderada, 1=desorganização severa, 0=incapaz.
 8. **Memória tardia**: evocação livre após ≥5 minutos de intervalo obrigatório (bloqueio automático até cumprir o tempo).
 9. **Reconhecimento**: prancha `bbrc2.png` (20 figuras) apenas para referência visual; respostas exclusivamente verbais com vocabulário restrito de alvos + distratores.
 10. **Pós-teste**: registro de interrupções e gravação de ambiente; geração de relatório estruturado (JSON/CSV/PDF).
@@ -52,7 +52,7 @@ Implementar a Bateria Breve de Rastreio Cognitivo (BBRC/BCSB) com aplicação pa
 ## Pontuação e validações
 - **Memórias**: escore = nº de alvos únicos (0–10). Intrusões e repetições registradas, não pontuadas.
 - **Fluência**: escore = nº de animais únicos válidos em 60 s. Repetições e não-animais registrados.
-- **Relógio**: escore Shulman (0–5) com opção de apoio automático via `analyzeClockDrawing`.
+- **Relógio**: escore Shulman (0–5) com análise automática via IA (Gemini) ou pontuação manual. IA retorna score + justificativa.
 - **Reconhecimento**: escore = nº de alvos nomeados (0–10); distratores mencionados contabilizados como intrusão.
 
 ## Componentes de referência
