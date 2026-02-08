@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="./vite.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <meta
+      name="description"
+      content="BBRC Digital - Bateria Breve de Rastreio Cognitivo para avaliação de declínio cognitivo"
+    />
+    <meta name="theme-color" content="#2563eb" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="BBRC Digital" />
+    <title>BBRC Digital - Teste de Memória</title>
+    <!-- Polyfill: @google/genai references process.version/platform/arch for HTTP headers -->
+    <script>
+      if (typeof globalThis.process === 'undefined') {
+        globalThis.process = { env: {}, version: '', platform: 'browser', arch: '', emit: function(){} };
+      } else if (typeof globalThis.process.env === 'undefined') {
+        globalThis.process.env = {};
+      }
+    </script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              medical: {
+                50: '#eff6ff',
+                100: '#dbeafe',
+                200: '#bfdbfe',
+                300: '#93c5fd',
+                400: '#60a5fa',
+                500: '#3b82f6',
+                600: '#2563eb',
+                700: '#1d4ed8',
+                800: '#1e40af',
+                900: '#1e3a8a',
+              }
+            },
+            animation: {
+              'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+              'bounce-slow': 'bounce 2s infinite',
+            }
+          }
+        }
+      }
+    </script>
+    <style>
+      /* Estilos base para acessibilidade */
+      html {
+        font-size: 18px;
+        -webkit-tap-highlight-color: transparent;
+      }
+
+      body {
+        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+      }
+
+      /* Botoes maiores para toque */
+      button {
+        min-height: 44px;
+        min-width: 44px;
+      }
+
+      /* Inputs maiores */
+      input, select {
+        min-height: 48px;
+        font-size: 1.125rem;
+      }
+
+      /* Focus visivel */
+      *:focus {
+        outline: 3px solid #3b82f6;
+        outline-offset: 2px;
+      }
+
+      /* Animacao suave */
+      * {
+        transition-property: background-color, border-color, color, fill, stroke, opacity, box-shadow, transform;
+        transition-duration: 150ms;
+        transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+      }
+
+      /* Desabilitar zoom em inputs no iOS */
+      @media screen and (max-width: 768px) {
+        input, select, textarea {
+          font-size: 16px !important;
+        }
+      }
+
+      /* Scrollbar acessivel */
+      ::-webkit-scrollbar {
+        width: 12px;
+        height: 12px;
+      }
+
+      ::-webkit-scrollbar-track {
+        background: #f1f5f9;
+        border-radius: 6px;
+      }
+
+      ::-webkit-scrollbar-thumb {
+        background: #94a3b8;
+        border-radius: 6px;
+      }
+
+      ::-webkit-scrollbar-thumb:hover {
+        background: #64748b;
+      }
+
+      /* Print styles */
+      @media print {
+        body {
+          font-size: 12pt;
+        }
+        button, .no-print {
+          display: none !important;
+        }
+      }
+    </style>
+    <script type="module" crossorigin src="./assets/index-CSk_sEUP.js"></script>
+  </head>
+  <body class="bg-slate-50 text-slate-900 antialiased selection:bg-blue-100 selection:text-blue-900">
+    <div id="root"></div>
+    <noscript>
+      <div style="padding: 2rem; text-align: center; font-size: 1.25rem;">
+        <h1>JavaScript Necessário</h1>
+        <p>Este aplicativo requer JavaScript para funcionar. Por favor, habilite o JavaScript no seu navegador.</p>
+      </div>
+    </noscript>
+  </body>
+</html>
