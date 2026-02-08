@@ -13,6 +13,14 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="BBRC Digital" />
     <title>BBRC Digital - Teste de Memória</title>
+    <!-- Polyfill: @google/genai references process.version/platform/arch for HTTP headers -->
+    <script>
+      if (typeof globalThis.process === 'undefined') {
+        globalThis.process = { env: {}, version: '', platform: 'browser', arch: '', emit: function(){} };
+      } else if (typeof globalThis.process.env === 'undefined') {
+        globalThis.process.env = {};
+      }
+    </script>
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
